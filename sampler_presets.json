@@ -1,0 +1,62 @@
+{
+  "Independent-High-Speaker-CFG": {
+    "num_steps": "40",
+    "cfg_scale_text": "3.0",
+    "cfg_scale_speaker": "8.0",
+    "cfg_min_t": "0.5",
+    "cfg_max_t": "1.0",
+    "truncation_factor": "1.",
+    "rescale_k": "1.",
+    "rescale_sigma": "3.0"
+  },
+  "Independent-High-Speaker-CFG-Flat": {
+    "num_steps": "40",
+    "cfg_scale_text": "3.0",
+    "cfg_scale_speaker": "8.0",
+    "cfg_min_t": "0.5",
+    "cfg_max_t": "1.0",
+    "truncation_factor": "0.8",
+    "rescale_k": "1.2",
+    "rescale_sigma": "3.0"
+  },
+  "Independent-High-CFG": {
+    "num_steps": "40",
+    "cfg_scale_text": "8.0",
+    "cfg_scale_speaker": "8.0",
+    "cfg_min_t": "0.5",
+    "cfg_max_t": "1.0",
+    "truncation_factor": "1.",
+    "rescale_k": "1.",
+    "rescale_sigma": "3.0"
+  },
+  "Independent-High-CFG-Flat": {
+    "num_steps": "40",
+    "cfg_scale_text": "8.0",
+    "cfg_scale_speaker": "8.0",
+    "cfg_min_t": "0.5",
+    "cfg_max_t": "1.0",
+    "truncation_factor": "0.8",
+    "rescale_k": "1.2",
+    "rescale_sigma": "3.0"
+  },
+  "Independent-Low-CFG": {
+    "num_steps": "40",
+    "cfg_scale_text": "3.0",
+    "cfg_scale_speaker": "3.0",
+    "cfg_min_t": "0.5",
+    "cfg_max_t": "1.0",
+    "truncation_factor": "1.",
+    "rescale_k": "1.",
+    "rescale_sigma": "3.0"
+  },
+  "Independent-Low-CFG-Flat": {
+    "num_steps": "40",
+    "cfg_scale_text": "3.0",
+    "cfg_scale_speaker": "3.0",
+    "cfg_min_t": "0.5",
+    "cfg_max_t": "1.0",
+    "truncation_factor": "0.8",
+    "rescale_k": "1.2",
+    "rescale_sigma": "3.0"
+  }
+}
