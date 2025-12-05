@@ -1,15 +1,40 @@
-# Echo-TTS (Windows + Voxta fork)
+# Echo‑TTS (Windows + Voxta oriented fork)
 
-This fork of Echo-TTS is optimized for Windows users and for integration with [Voxta.ai](https://voxta.ai). It adds a Windows-friendly Gradio UI, a Voxta/ChatterBox-compatible HTTP TTS API, GPU/CPU selection with persistence, and low-VRAM safeguards for 8GB GPUs, while keeping the original model behavior.
+> A Windows- and Voxta-friendly fork of the original Echo‑TTS project.
 
-A multi-speaker text-to-speech model with speaker reference conditioning. See the [blog post](https://jordandarefsky.com/blog/2025/echo/) for technical details.
+This fork of Echo‑TTS is optimized for Windows users and for integration with
+[Voxta.ai](https://voxta.ai). It builds on the original Gradio UI and adds:
 
-**Model:** [jordand/echo-tts-base](https://huggingface.co/jordand/echo-tts-base) | **Demo:** [echo-tts-preview](https://huggingface.co/spaces/jordand/echo-tts-preview)
+- A **Windows-friendly Gradio UI** with sensible defaults
+- A **Voxta/ChatterBox-compatible HTTP TTS API**
+- A **Voxta provider JSON generator** directly in the UI
+- **GPU / CPU selection with persistence** across runs
+- **Low-VRAM safeguards** tuned for ≈8 GB GPUs
+
+All of this is layered on top of the original Echo‑TTS model behavior.
+
+A multi-speaker text-to-speech model with speaker reference conditioning. See
+the original [blog post](https://jordandarefsky.com/blog/2025/echo/) for
+technical details.
+
+**Model:** [jordand/echo-tts-base](https://huggingface.co/jordand/echo-tts-base)
+| **Demo:** [echo-tts-preview](https://huggingface.co/spaces/jordand/echo-tts-preview)
 
 > **Note**
-> This repository is an **early test fork** focused on Windows and Voxta.ai integration.
-> The **official Echo-TTS API implementation** is maintained separately at:
+> This repository is an **early test fork** focused on Windows and Voxta.ai
+> integration.
+> The **official Echo‑TTS API implementation** is maintained separately at:
 > https://github.com/KevinAHM/echo-tts-api
+>
+> This is just a fun learning experiment from a fan of the original creators’
+> work.
+
+---
+
+## Original README (upstream project)
+
+> The following is the original README content from the upstream
+> `jordand/echo-tts` repository, preserved here for reference.
 
 ## Responsible Use
 
