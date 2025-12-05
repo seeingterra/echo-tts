@@ -70,7 +70,7 @@ def _synthesize_to_path(
 
     # Conservative defaults tuned for short, Voxta-style utterances.
     # These are slightly lower than the UI defaults to reduce tail noise.
-    num_steps = 28
+    num_steps = 20
     cfg_scale_text = 3.0
     cfg_scale_speaker = 3.0
     cfg_min_t = 0.5
