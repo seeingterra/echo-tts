@@ -5,7 +5,7 @@ from huggingface_hub import hf_hub_download
 import safetensors.torch as st
 import torch
 import torchaudio
-from torchcodec.decoders import AudioDecoder
+import ffmpeg
 
 from autoencoder import DAC, build_ae
 from model import EchoDiT
@@ -101,14 +101,57 @@ def load_pca_state_from_hf(repo_id: str = "jordand/echo-tts-base", device: str =
 # ________
 
 def load_audio(path: str, max_duration: int = 300) -> torch.Tensor:
+    """Load mono audio using FFmpeg, resampled to 44.1 kHz.
 
-    decoder = AudioDecoder(path)
-    sr = decoder.metadata.sample_rate
-    audio = decoder.get_samples_played_in_range(0, max_duration)
-    audio = audio.data.mean(dim=0).unsqueeze(0)
-    audio = torchaudio.functional.resample(audio, sr, 44_100)
-    audio = audio / torch.maximum(audio.abs().max(), torch.tensor(1.))
-    # is this better than clipping? should we target a specific energy level?
+    FFmpeg is instructed to downmix any multi-channel input to mono, so both
+    the Gradio UI and HTTP API see a consistent (1, length) reference signal.
+
+    Args:
+        path: Path to the audio file.
+        max_duration: Maximum duration in seconds; audio longer than this
+            will be truncated. Default is 300 seconds.
+
+    Returns:
+        A (1, length) float32 tensor at 44.1 kHz, normalized to max abs 1.0.
+    """
+    target_sr = 44_100
+
+    # Limit duration at the decoder level if requested
+    input_kwargs: dict[str, float] = {}
+    if max_duration is not None and max_duration > 0:
+        input_kwargs["t"] = float(max_duration)
+
+    try:
+        out, _ = (
+            ffmpeg
+            .input(path, **input_kwargs)
+            .output(
+                "pipe:",
+                format="f32le",   # 32-bit float PCM
+                acodec="pcm_f32le",
+                ac=1,              # force mono (downmix in ffmpeg)
+                ar=target_sr,      # resample to 44.1 kHz
+            )
+            .run(capture_stdout=True, capture_stderr=True, quiet=True)
+        )
+    except ffmpeg.Error as e:
+        raise RuntimeError(
+            f"FFmpeg failed to decode audio at '{path}': "
+            f"{e.stderr.decode(errors='ignore') if e.stderr else ''}"
+        ) from e
+
+    # Convert raw bytes to float32 tensor and shape to (1, length)
+    audio = torch.frombuffer(out, dtype=torch.float32)
+    if audio.numel() == 0:
+        raise RuntimeError(f"FFmpeg produced empty audio tensor for '{path}'")
+
+    audio = audio.unsqueeze(0)
+
+    # Normalize to avoid clipping
+    max_abs = audio.abs().max()
+    if max_abs > 0:
+        audio = audio / max_abs
+
     return audio
 
 def tokenizer_encode(text: str, append_bos: bool = True, normalize: bool = True, return_normalized_text: bool = False) -> torch.Tensor | Tuple[torch.Tensor, str]:

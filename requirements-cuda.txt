@@ -1,0 +1,23 @@
+# CUDA-enabled requirements for Echo-TTS (Windows-friendly)
+#
+# Use this file if you have an NVIDIA GPU and want GPU acceleration.
+# It pins torch / torchaudio to versions that should be compatible with
+# CUDA 12.4 wheels from the official PyTorch index as of late 2025.
+# Always cross-check with:
+#   https://pytorch.org/get-started/locally/
+# and adjust the versions or index URL as needed for your CUDA runtime.
+
+--index-url https://download.pytorch.org/whl/cu124
+torch
+torchaudio
+
+# The remaining dependencies are device-agnostic and mirror requirements.txt
+huggingface-hub
+numpy
+safetensors
+einops
+gradio==5.49.1
+fastapi
+uvicorn
+ffmpeg-python
+requests

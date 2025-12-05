@@ -17,6 +17,11 @@ import gradio as gr
 import torch
 import torchaudio
 
+TEXT_PRESETS_PATH = Path("./text_presets.txt")
+SAMPLER_PRESETS_PATH = Path("./sampler_presets.json")
+DEVICE_CONFIG_PATH = Path("./device_config.json")
+RUNTIME_CONFIG_PATH = Path("./runtime_config.json")
+
 from inference import (
     load_model_from_hf,
     load_fish_ae_from_hf,
@@ -26,19 +31,55 @@ from inference import (
     sample_pipeline,
     compile_model,
     compile_fish_ae,
-    sample_euler_cfg_independent_guidances
+    sample_euler_cfg_independent_guidances,
 )
 
-# --------------------------------------------------------------------
-# IF ON 8GB VRAM GPU, SET FISH_AE_DTYPE to bfloat16 and DEFAULT_SAMPLE_LATENT_LENGTH to < 640 (e.g., 576)
+def load_runtime_config() -> dict:
+    """Load runtime configuration options (like low VRAM mode).
+
+    This is separate from device selection and can include flags that affect
+    how models are loaded (e.g., dtypes) and generation defaults.
+    """
+    if RUNTIME_CONFIG_PATH.exists():
+        try:
+            with open(RUNTIME_CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+
+def save_runtime_config(config: dict) -> None:
+    try:
+        with open(RUNTIME_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f)
+    except Exception:
+        # Non-fatal
+        pass
+
+
+_runtime_cfg = load_runtime_config()
+LOW_VRAM_DEFAULT = bool(_runtime_cfg.get("low_vram_mode", True))
 
 # Configuration
-MODEL_DTYPE = torch.bfloat16
-FISH_AE_DTYPE = torch.float32
-# FISH_AE_DTYPE = torch.bfloat16 # USE THIS IF OOM ON 8GB vram GPU
+if LOW_VRAM_DEFAULT:
+    # 8GB-friendly defaults
+    MODEL_DTYPE = torch.bfloat16
+    FISH_AE_DTYPE = torch.bfloat16
+else:
+    # Higher precision mode (more VRAM, slightly higher quality)
+    MODEL_DTYPE = torch.float32
+    FISH_AE_DTYPE = torch.float32
 
-DEFAULT_SAMPLE_LATENT_LENGTH = 640 # decrease if OOM on 8GB vram GPU
-# DEFAULT_SAMPLE_LATENT_LENGTH = 576  # (example, ~27 seconds rather than ~30; can change depending on what fits in VRAM)
+#EFAULT_SAMPLE_LATENT_LENGTH = 640 # decrease if OOM on 8GB vram GPU
+DEFAULT_SAMPLE_LATENT_LENGTH = 576  # (example, ~27 seconds rather than ~30; can change depending on what fits in VRAM)
+
+# Additional low-VRAM safety limits (tuned for ~8GB GPUs)
+MAX_SAFE_LATENT_LENGTH = 576
+MAX_SAFE_STEPS = 48
+MAX_SPEAKER_SECONDS = 120  # max duration of reference audio passed to the model
 
 # NOTE peak S1-DAC decoding VRAM > peak latent sampling VRAM, so decoding in chunks (which is posisble as S1-DAC is causal) would allow for full 640-length generation on lower VRAM GPUs
 
@@ -49,20 +90,157 @@ AUDIO_PROMPT_FOLDER = Path("./audio_prompts")
 
 # --------------------------------------------------------------------
 
-TEXT_PRESETS_PATH = Path("./text_presets.txt")
-SAMPLER_PRESETS_PATH = Path("./sampler_presets.json")
-
 TEMP_AUDIO_DIR = Path("./temp_gradio_audio")
 TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 # --------------------------------------------------------------------
-# Model loading (eager for local use)
-model = load_model_from_hf(dtype=MODEL_DTYPE, delete_blockwise_modules=True)
-fish_ae = load_fish_ae_from_hf(dtype=FISH_AE_DTYPE)
-pca_state = load_pca_state_from_hf()
+# Device selection & model loading
+
+def get_available_devices() -> list[str]:
+    """Return a list of device labels: CPU + available CUDA devices.
+
+    Labels are of the form "CPU" and "GPU 0 (cuda:0)" etc. The first CUDA
+    device (if any) is considered the default when no config is present.
+    """
+    devices: list[str] = ["CPU"]
+    if torch.cuda.is_available():
+        for idx in range(torch.cuda.device_count()):
+            name = torch.cuda.get_device_name(idx)
+            devices.append(f"GPU {idx} (cuda:{idx}) - {name}")
+    return devices
+
+
+def _device_label_to_torch(device_label: str) -> str:
+    """Map a human-readable device label from the dropdown to a torch device string."""
+    if not device_label:
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if device_label.upper() == "CPU":
+        return "cpu"
+    if "cuda:" in device_label:
+        # Expect substring like "cuda:0" inside the label
+        start = device_label.find("cuda:")
+        if start != -1:
+            # Grab up to the next closing parenthesis or end of string
+            end = device_label.find(")", start)
+            if end == -1:
+                return device_label[start:]
+            return device_label[start:end]
+    # Fallbacks
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def load_device_config() -> str:
+    """Load persisted device label from config file, defaulting to best available.
+
+    Returns a label that should match one of the choices from get_available_devices().
+    If the stored label is invalid, returns a safe default.
+    """
+    devices = get_available_devices()
+    default_label = devices[1] if len(devices) > 1 else devices[0]
+
+    if DEVICE_CONFIG_PATH.exists():
+        try:
+            with open(DEVICE_CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            label = data.get("device_label")
+            if isinstance(label, str) and label in devices:
+                return label
+        except Exception:
+            pass
+
+    return default_label
+
+
+def save_device_config(device_label: str) -> None:
+    """Persist the chosen device label so it is reused on next startup (UI & API)."""
+    try:
+        with open(DEVICE_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"device_label": device_label}, f)
+    except Exception:
+        # Non-fatal – app should still run even if config can't be written
+        pass
+
+
+def _init_models_for_device(device_label: str):
+    """(Re)load models for the specified device label.
+
+    This function updates global model, fish_ae, and pca_state variables, and is
+    used both at startup and when the device is changed via the UI. It ensures
+    that API usage always reflects the current, persisted device.
+    """
+    global model, fish_ae, pca_state
+
+    torch_device = _device_label_to_torch(device_label)
+
+    # Free any existing CUDA allocations before reloading on a different GPU
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+    model = load_model_from_hf(device=torch_device, dtype=MODEL_DTYPE, delete_blockwise_modules=True)
+    fish_ae = load_fish_ae_from_hf(device=torch_device, dtype=FISH_AE_DTYPE)
+    pca_state = load_pca_state_from_hf(device=torch_device)
+
+
+def _init_models_for_torch_device(torch_device: str):
+    """(Re)load models directly for a given torch device string.
+
+    This is used by the OOM fallback path, which works with raw torch
+    device strings (e.g., "cuda:1" or "cpu") instead of UI labels.
+    """
+    global model, fish_ae, pca_state
+
+    # Best-effort cache clear before moving to a different CUDA device
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+    model = load_model_from_hf(device=torch_device, dtype=MODEL_DTYPE, delete_blockwise_modules=True)
+    fish_ae = load_fish_ae_from_hf(device=torch_device, dtype=FISH_AE_DTYPE)
+    pca_state = load_pca_state_from_hf(device=torch_device)
+
+
+# Initialize device & models at import time so API users get a ready model
+INITIAL_DEVICE_LABEL = load_device_config()
+_init_models_for_device(INITIAL_DEVICE_LABEL)
 
 model_compiled = None
 fish_ae_compiled = None
+
+
+def _get_device_priority_list(primary_device: str | None) -> list[str]:
+    """Return a prioritized list of devices to try for generation.
+
+    Order: primary device, then other CUDA devices, then CPU.
+    """
+    devices: list[str] = []
+
+    if primary_device:
+        devices.append(primary_device)
+    else:
+        if torch.cuda.is_available():
+            devices.append("cuda")
+        else:
+            devices.append("cpu")
+
+    # Add other CUDA devices (if any) that aren't already listed
+    if torch.cuda.is_available():
+        for idx in range(torch.cuda.device_count()):
+            dev = f"cuda:{idx}"
+            if dev not in devices:
+                devices.append(dev)
+
+    # Always allow CPU as a final fallback
+    if "cpu" not in devices:
+        devices.append("cpu")
+
+    return devices
 
 # --------------------------------------------------------------------
 # Helper functions
@@ -97,6 +275,11 @@ def cleanup_temp_audio(dir_: Path, user_id: str | None, max_age_sec: int = 60 * 
 
 def save_audio_with_format(audio_tensor: torch.Tensor, base_path: Path, filename: str, sample_rate: int, audio_format: str) -> Path:
     """Save audio in specified format, fallback to WAV if MP3 encoding fails."""
+    # Ensure tensor is on CPU and 2D (channels, time) for torchaudio
+    audio_tensor = audio_tensor.detach().cpu()
+    if audio_tensor.dim() == 1:
+        audio_tensor = audio_tensor.unsqueeze(0)
+
     if audio_format == "mp3":
         try:
             output_path = base_path / f"{filename}.mp3"
@@ -112,11 +295,49 @@ def save_audio_with_format(audio_tensor: torch.Tensor, base_path: Path, filename
         except Exception as e:
             print(f"MP3 encoding failed: {e}, falling back to WAV")
             output_path = base_path / f"{filename}.wav"
-            torchaudio.save(str(output_path), audio_tensor, sample_rate)
-            return output_path
+            # Try torchaudio first; if no backend, fall back to ffmpeg-python
+            try:
+                torchaudio.save(str(output_path), audio_tensor, sample_rate)
+                return output_path
+            except Exception as e2:
+                print(f"torchaudio WAV save failed ({e2}), trying ffmpeg fallback")
 
+                import ffmpeg
+
+                tmp_raw = audio_tensor.squeeze(0).numpy().astype("float32").tobytes()
+                ffmpeg.input(
+                    "pipe:",
+                    format="f32le",
+                    ac=1,
+                    ar=sample_rate,
+                ).output(
+                    str(output_path),
+                    format="wav",
+                    acodec="pcm_s16le",
+                ).run(input=tmp_raw, capture_stdout=True, capture_stderr=True, quiet=True)
+                return output_path
+
+    # Default: save as WAV
     output_path = base_path / f"{filename}.wav"
-    torchaudio.save(str(output_path), audio_tensor, sample_rate)
+    try:
+        torchaudio.save(str(output_path), audio_tensor, sample_rate)
+    except Exception as e:
+        print(f"torchaudio WAV save failed ({e}), trying ffmpeg fallback")
+
+        import ffmpeg
+
+        tmp_raw = audio_tensor.squeeze(0).numpy().astype("float32").tobytes()
+        ffmpeg.input(
+            "pipe:",
+            format="f32le",
+            ac=1,
+            ar=sample_rate,
+        ).output(
+            str(output_path),
+            format="wav",
+            acodec="pcm_s16le",
+        ).run(input=tmp_raw, capture_stdout=True, capture_stderr=True, quiet=True)
+
     return output_path
 
 
@@ -155,7 +376,7 @@ def find_min_bucket_gte(values_str: str, actual_length: int) -> int | None:
     return max(values)
 
 
-def generate_audio(
+def synthesize_to_file(
     text_prompt: str,
     speaker_audio_path: str,
     num_steps: int,
@@ -180,8 +401,14 @@ def generate_audio(
     use_compile: bool,
     show_original_audio: bool,
     session_id: str,
-) -> Tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any]:
-    """Generate audio using the model."""
+    fade_out_seconds: float = 0.0,
+):
+    """Core generation logic assuming models are already on the correct device.
+
+    This function performs TTS synthesis and writes the main generated audio to a
+    file under TEMP_AUDIO_DIR, returning the output Path and related metadata.
+    It is used by both the Gradio UI wrapper and the HTTP API server.
+    """
     global model_compiled, fish_ae_compiled
 
     if use_compile:
@@ -202,7 +429,8 @@ def generate_audio(
 
     start_time = time.time()
 
-    num_steps_int = min(max(int(num_steps), 1), 80)
+    # Clamp steps to a range that works well on <=8GB GPUs
+    num_steps_int = min(max(int(num_steps), 5), MAX_SAFE_STEPS)
     rng_seed_int = int(rng_seed) if rng_seed is not None else 0
     cfg_scale_text_val = float(cfg_scale_text)
     cfg_scale_speaker_val = float(cfg_scale_speaker) if cfg_scale_speaker is not None else None
@@ -224,7 +452,11 @@ def generate_audio(
 
     # Load speaker audio early so we can compute actual lengths for bucket selection
     use_zero_speaker = not speaker_audio_path or speaker_audio_path == ""
-    speaker_audio = load_audio(speaker_audio_path).cuda() if not use_zero_speaker else None
+    speaker_audio = (
+        load_audio(speaker_audio_path, max_duration=MAX_SPEAKER_SECONDS).cuda()
+        if not use_zero_speaker
+        else None
+    )
 
     if use_custom_shapes:
         # Compute actual text byte length
@@ -245,6 +477,9 @@ def generate_audio(
         pad_to_max_text_length = None
         pad_to_max_speaker_latent_length = None
         sample_latent_length_val = DEFAULT_SAMPLE_LATENT_LENGTH or 640
+
+    # Hard safety cap for low-VRAM GPUs to reduce OOM risk
+    sample_latent_length_val = min(sample_latent_length_val, MAX_SAFE_LATENT_LENGTH)
 
     
     sample_fn = partial(
@@ -278,13 +513,44 @@ def generate_audio(
 
     audio_to_save = audio_out[0].cpu()
 
+    # Optional short silence before fade-out to give a natural pause at the end.
+    tail_silence_seconds = 0.12  # small pause, tuned for Voxta utterances
+    sr = 44100
+    if tail_silence_seconds > 0.0:
+        silence_samples = int(tail_silence_seconds * sr)
+        if silence_samples > 0:
+            import torch
+
+            silence = torch.zeros_like(audio_to_save[..., :silence_samples])
+            audio_to_save = torch.cat([audio_to_save, silence], dim=-1)
+
+    # Optional fade-out at the end to suppress any residual tail noise.
+    if fade_out_seconds and fade_out_seconds > 0.0:
+        # Desired fade length based on requested fade duration
+        desired_fade_len = max(1, int(fade_out_seconds * sr))
+        num_samples = audio_to_save.shape[-1]
+
+        # Never try to fade more samples than we actually have
+        fade_len = min(desired_fade_len, num_samples)
+
+        if fade_len > 1:
+            import torch
+
+            fade = torch.linspace(
+                1.0,
+                0.0,
+                steps=fade_len,
+                device=audio_to_save.device,
+                dtype=audio_to_save.dtype,
+            )
+
+            # Apply fade along the last dimension only (time axis)
+            audio_to_save[..., -fade_len:] *= fade
+
     stem = make_stem("generated", session_id)
     output_path = save_audio_with_format(audio_to_save, TEMP_AUDIO_DIR, stem, 44100, audio_format)
 
     generation_time = time.time() - start_time
-    time_str = f"⏱️ Total generation time: {generation_time:.2f}s"
-    text_display = f"**Text Prompt (normalized):**\n\n{normalized_text}"
-
     recon_output_path = None
     original_output_path = None
 
@@ -305,7 +571,68 @@ def generate_audio(
         original_stem = make_stem("original_audio", session_id)
         original_output_path = save_audio_with_format(speaker_audio.cpu(), TEMP_AUDIO_DIR, original_stem, 44100, audio_format)
 
+    return output_path, normalized_text, generation_time, original_output_path, recon_output_path, speaker_audio
+
+
+def _generate_audio_on_active_model(
+    text_prompt: str,
+    speaker_audio_path: str,
+    num_steps: int,
+    rng_seed: int,
+    cfg_scale_text: float,
+    cfg_scale_speaker: float,
+    cfg_min_t: float,
+    cfg_max_t: float,
+    truncation_factor: float,
+    rescale_k: float,
+    rescale_sigma: float,
+    force_speaker: bool,
+    speaker_kv_scale: float,
+    speaker_kv_min_t: float,
+    speaker_kv_max_layers: int,
+    reconstruct_first_30_seconds: bool,
+    use_custom_shapes: bool,
+    max_text_byte_length: str,
+    max_speaker_latent_length: str,
+    sample_latent_length: str,
+    audio_format: str,
+    use_compile: bool,
+    show_original_audio: bool,
+    session_id: str,
+) -> Tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any]:
+    """Wrapper around synthesize_to_file that formats Gradio UI outputs."""
+
+    output_path, normalized_text, generation_time, original_output_path, recon_output_path, speaker_audio = synthesize_to_file(
+        text_prompt=text_prompt,
+        speaker_audio_path=speaker_audio_path,
+        num_steps=num_steps,
+        rng_seed=rng_seed,
+        cfg_scale_text=cfg_scale_text,
+        cfg_scale_speaker=cfg_scale_speaker,
+        cfg_min_t=cfg_min_t,
+        cfg_max_t=cfg_max_t,
+        truncation_factor=truncation_factor,
+        rescale_k=rescale_k,
+        rescale_sigma=rescale_sigma,
+        force_speaker=force_speaker,
+        speaker_kv_scale=speaker_kv_scale,
+        speaker_kv_min_t=speaker_kv_min_t,
+        speaker_kv_max_layers=speaker_kv_max_layers,
+        reconstruct_first_30_seconds=reconstruct_first_30_seconds,
+        use_custom_shapes=use_custom_shapes,
+        max_text_byte_length=max_text_byte_length,
+        max_speaker_latent_length=max_speaker_latent_length,
+        sample_latent_length=sample_latent_length,
+        audio_format=audio_format,
+        use_compile=use_compile,
+        show_original_audio=show_original_audio,
+        session_id=session_id,
+    )
+
+    time_str = f"⏱️ Total generation time: {generation_time:.2f}s"
+    text_display = f"**Text Prompt (normalized):**\n\n{normalized_text}"
     show_reference_section = (show_original_audio or reconstruct_first_30_seconds) and speaker_audio is not None
+
     return (
         gr.update(),
         gr.update(value=str(output_path), visible=True),
@@ -317,6 +644,103 @@ def generate_audio(
         gr.update(visible=(reconstruct_first_30_seconds and speaker_audio is not None)),
         gr.update(visible=show_reference_section),
     )
+
+
+def generate_audio(
+    text_prompt: str,
+    speaker_audio_path: str,
+    num_steps: int,
+    rng_seed: int,
+    cfg_scale_text: float,
+    cfg_scale_speaker: float,
+    cfg_min_t: float,
+    cfg_max_t: float,
+    truncation_factor: float,
+    rescale_k: float,
+    rescale_sigma: float,
+    force_speaker: bool,
+    speaker_kv_scale: float,
+    speaker_kv_min_t: float,
+    speaker_kv_max_layers: int,
+    reconstruct_first_30_seconds: bool,
+    use_custom_shapes: bool,
+    max_text_byte_length: str,
+    max_speaker_latent_length: str,
+    sample_latent_length: str,
+    audio_format: str,
+    use_compile: bool,
+    show_original_audio: bool,
+    session_id: str,
+) -> Tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any]:
+    """Generate audio with OOM-aware device fallback.
+
+    Tries the primary selected device first, then other GPUs, then CPU.
+    Only CUDA out-of-memory errors trigger fallback; other errors are raised.
+    """
+    global model, fish_ae, pca_state, model_compiled, fish_ae_compiled
+
+    # Determine the primary torch device from the initial UI label
+    primary_torch_device = _device_label_to_torch(INITIAL_DEVICE_LABEL)
+    device_candidates = _get_device_priority_list(primary_torch_device)
+
+    last_oom: Exception | None = None
+
+    for dev in device_candidates:
+        try:
+            # If we are moving to a different device, re-init models there
+            # (skip if dev is the same as current primary device on first iteration).
+            if dev != primary_torch_device:
+                _init_models_for_torch_device(dev)
+                model_compiled = None
+                fish_ae_compiled = None
+
+            return _generate_audio_on_active_model(
+                text_prompt,
+                speaker_audio_path,
+                num_steps,
+                rng_seed,
+                cfg_scale_text,
+                cfg_scale_speaker,
+                cfg_min_t,
+                cfg_max_t,
+                truncation_factor,
+                rescale_k,
+                rescale_sigma,
+                force_speaker,
+                speaker_kv_scale,
+                speaker_kv_min_t,
+                speaker_kv_max_layers,
+                reconstruct_first_30_seconds,
+                use_custom_shapes,
+                max_text_byte_length,
+                max_speaker_latent_length,
+                sample_latent_length,
+                audio_format,
+                use_compile,
+                show_original_audio,
+                session_id,
+            )
+
+        except RuntimeError as e:
+            msg = str(e)
+            is_cuda_oom = "CUDA out of memory" in msg or "CUDA error: out of memory" in msg
+            is_cuda_device = dev.startswith("cuda")
+            if is_cuda_oom and is_cuda_device:
+                last_oom = e
+                # Best-effort cache clear before trying next device
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                continue
+            # For non-OOM or non-CUDA errors, raise immediately
+            raise
+
+    # If we exhausted all devices and only saw OOMs, re-raise the last one
+    if last_oom is not None:
+        raise last_oom
+
+    raise RuntimeError("Failed to generate audio on any available device.")
 
 
 # UI Helper Functions
@@ -577,6 +1001,141 @@ function () {
 """
 
 
+# -------------------------------------------------------------
+# API server management helpers (for Voxta/HTTP TTS)
+
+_api_process = None
+
+
+def _normalize_host_for_server(host: str) -> str:
+    """Normalize host value for uvicorn --host (no scheme, no slashes)."""
+    host = host.strip()
+    if host.startswith("http://"):
+        host = host[len("http://") :]
+    elif host.startswith("https://"):
+        host = host[len("https://") :]
+    return host.strip().strip("/") or "0.0.0.0"
+
+
+def _normalize_host_for_url(host: str) -> str:
+    """Normalize host value for use in HTTP URLs (ensure scheme, no trailing slash)."""
+    host = host.strip()
+    if not host.startswith("http://") and not host.startswith("https://"):
+        host = "http://" + host
+    return host.rstrip("/")
+
+
+def start_api_server(host: str, port: int) -> str:
+    """Start the FastAPI-based Echo-TTS API server in a background process.
+
+    This uses `uvicorn` to run `api_server:app`. If the server is already
+    running, this is a no-op.
+    """
+    global _api_process
+    server_host = _normalize_host_for_server(host)
+    if _api_process is not None and _api_process.poll() is None:
+        return f"API server already running at {host}:{port}."
+
+    import subprocess, sys
+
+    cmd = [
+    sys.executable,
+    "-m",
+    "uvicorn",
+    "api_server:app",
+    "--host",
+    server_host,
+        "--port",
+        str(int(port)),
+    ]
+
+    try:
+        _api_process = subprocess.Popen(cmd)
+        return f"Started API server at {host}:{port}."
+    except Exception as e:
+        _api_process = None
+        return f"Failed to start API server: {e}"
+
+
+def stop_api_server() -> str:
+    """Stop the background API server process if it's running."""
+    global _api_process
+    if _api_process is None or _api_process.poll() is not None:
+        _api_process = None
+        return "API server is not running."
+
+    try:
+        _api_process.terminate()
+        _api_process.wait(timeout=5)
+        msg = "Stopped API server."
+    except Exception:
+        msg = "Failed to stop API server cleanly; it may have already exited."
+    finally:
+        _api_process = None
+
+    return msg
+
+
+def generate_voxta_config(label: str, host: str, port: int, fmt: str) -> str:
+    """Generate a Voxta provider JSON config string for Echo-TTS API."""
+    url_host = _normalize_host_for_url(host)
+    base_url = f"{url_host}:" + str(int(port))
+    if fmt not in {"wav", "mp3"}:
+        fmt = "wav"
+
+    content_type = "audio/wav" if fmt == "wav" else "audio/mpeg"
+
+    # RequestBody string patterned after working chatterbox_tts.json example
+    # Fields are aligned with api_server.TTSRequest and Echo-TTS parameters.
+    request_body = (
+        '{\n'
+        '"text": "{{ text }}",\n'
+        '"voice_mode": "predefined",\n'
+        '"predefined_voice_id": "{{ voice_id }}",\n'
+        '"reference_audio_filename": "string",\n'
+        f'"output_format": "{fmt}",\n'
+        '"split_text": false,\n'
+        '"chunk_size": 120,\n'
+        '"temperature":0.8,\n'
+        '"exaggeration": 0.8,\n'
+        '"cfg_weight": 0.5,\n'
+        '"seed": 0, "speed_factor": 1,\n'
+        '"culture": "{{ culture }}",\n'
+        '"language": "{{ language }}"\n'
+        "}"
+    )
+
+    voices_format = (
+        '{\n'
+        '  "label": "{{display_name}}",\n'
+        '  "parameters": {\n'
+        '    "voice_id": "{{filename}}"\n'
+        '  }\n'
+        "}"
+    )
+
+    cfg = {
+        "label": label,
+        "values": {
+            "ContentType": content_type,
+            "ForceConversion": "true",
+            "UrlTemplate": f"{base_url}/tts",
+            "Request ContentType": "application/json",
+            "RequestBody": request_body,
+            "VoicesFormat": voices_format,
+            "ThinkingSpeech": "uh, ...\nmmh...\nhum...\nhuh...\noh...",
+            "AudioGap": "0",
+            "VoicesUrl": f"{base_url}/get_predefined_voices",
+            "AuthorizationHeader": " ",
+            "": "",
+        },
+    }
+
+    import json
+
+    return json.dumps(cfg, indent=2)
+
+
 def init_session():
     """Initialize session ID for this browser tab/session."""
     return secrets.token_hex(8)
@@ -589,6 +1148,17 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
     gr.Markdown("**License Notice:** All audio outputs are subject to non-commercial use [CC-BY-NC-SA-4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).")
 
     gr.Markdown("**Responsible Use:** Do not use this model to impersonate real people without their explicit consent or to generate deceptive audio.")
+
+    with gr.Row():
+        low_vram_checkbox = gr.Checkbox(
+            label="Low VRAM Mode (<= 8GB)",
+            value=LOW_VRAM_DEFAULT,
+            info=(
+                "Runs Echo-TTS in bfloat16 for the main model and autoencoder, "
+                "with conservative sequence lengths and reference durations. "
+                "Changing this requires restarting the app to fully reload models."
+            ),
+        )
 
     with gr.Accordion("📖 Quick Start Instructions", open=True):
         gr.Markdown(
@@ -604,6 +1174,24 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
         )
 
     session_id_state = gr.State(None)
+
+    # Device selection row (applies to UI and API usage; persisted between runs)
+    with gr.Row():
+        with gr.Column(scale=1, min_width=200):
+            gr.Markdown("#### Compute Device")
+            device_choices = get_available_devices()
+            device_dropdown = gr.Dropdown(
+                choices=device_choices,
+                value=INITIAL_DEVICE_LABEL if INITIAL_DEVICE_LABEL in device_choices else device_choices[0],
+                label="Select GPU / CPU",
+                info="Applies to all generations and API calls; stored in `device_config.json`.",
+            )
+        with gr.Column(scale=2):
+            gr.Markdown(
+                """
+                *Choose where to run Echo-TTS. GPU is recommended when available; CPU will be much slower.*
+                """
+            )
 
     gr.Markdown("# Speaker Reference")
     with gr.Row():
@@ -853,6 +1441,47 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
         with gr.Accordion("Autoencoder Reconstruction of First 30s of Reference", open=False, visible=False) as reference_accordion:
             reference_audio = gr.Audio(label="Decoded Reference Audio (30s)", visible=True)
 
+    # ---------------------------------------------------------
+    # Voxta / HTTP API section
+    gr.HTML('<hr class="section-separator">')
+    gr.Markdown("# Voxta / HTTP API Integration")
+
+    with gr.Accordion("🔌 Echo-TTS API Server & Voxta Config", open=False):
+        with gr.Row():
+            with gr.Column(scale=1):
+                api_host = gr.Textbox(label="API Host", value="http://localhost", lines=1)
+                api_port = gr.Number(label="API Port", value=8004, precision=0)
+                api_format = gr.Radio(choices=["wav", "mp3"], value="wav", label="Output Format")
+
+                start_api_btn = gr.Button("Start API Server", variant="primary")
+                stop_api_btn = gr.Button("Stop API Server")
+                api_status = gr.Markdown("API server status: idle")
+
+                def _start_api(host, port):
+                    msg = start_api_server(host, int(port))
+                    return f"API server status: {msg}"
+
+                def _stop_api():
+                    msg = stop_api_server()
+                    return f"API server status: {msg}"
+
+                start_api_btn.click(_start_api, inputs=[api_host, api_port], outputs=[api_status])
+                stop_api_btn.click(_stop_api, inputs=None, outputs=[api_status])
+
+            with gr.Column(scale=1):
+                provider_label = gr.Textbox(label="Voxta Provider Label", value="Echo-TTS", lines=1)
+                generate_cfg_btn = gr.Button("Generate Voxta Provider JSON")
+                cfg_output = gr.Code(label="Voxta Provider JSON", language="json")
+
+                def _gen_cfg(label, host, port, fmt):
+                    return generate_voxta_config(label, host, int(port), fmt)
+
+                generate_cfg_btn.click(
+                    _gen_cfg,
+                    inputs=[provider_label, api_host, api_port, api_format],
+                    outputs=[cfg_output],
+                )
+
     # Event handlers
     if AUDIO_PROMPT_FOLDER is not None and AUDIO_PROMPT_FOLDER.exists():
         audio_prompt_table.select(select_audio_prompt_file, outputs=[custom_audio_input])
@@ -927,6 +1556,22 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
         ],
     )
 
+    # Persist Low VRAM mode selection; takes effect on next restart (models reload).
+    def on_low_vram_change(enabled: bool):
+        cfg = load_runtime_config()
+        cfg["low_vram_mode"] = bool(enabled)
+        save_runtime_config(cfg)
+        # Inform the user that a restart is recommended to apply dtype changes.
+        return gr.update(
+            value=(
+                "Low VRAM mode setting saved. Please restart the app to fully "
+                "apply dtype changes to all models."
+            )
+        )
+
+    low_vram_message = gr.Markdown("", visible=False)
+    low_vram_checkbox.change(on_low_vram_change, inputs=[low_vram_checkbox], outputs=[low_vram_message])
+
     generate_btn.click(
         generate_audio,
         inputs=[
@@ -967,6 +1612,15 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
             reference_audio_header,
         ],
     )
+
+    # When the device is changed, reinitialize all models on the new device and persist the choice.
+    def on_device_change(new_device_label: str):
+        save_device_config(new_device_label)
+        _init_models_for_device(new_device_label)
+        # No UI component needs updating immediately; future generations use the new device.
+        return gr.update()
+
+    device_dropdown.change(on_device_change, inputs=[device_dropdown], outputs=[])
 
     demo.load(init_session, outputs=[session_id_state]).then(
         lambda: apply_sampler_preset(list(load_sampler_presets().keys())[0]),
