@@ -48,6 +48,16 @@ You are responsible for complying with local laws regarding biometric data and v
 
 Requires Python 3.10+.
 
+The **recommended setup on Windows** is to use a dedicated virtual
+environment for this project:
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+Then install dependencies:
+
 On Windows (CPU or generic install):
 
 ```bash

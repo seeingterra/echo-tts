@@ -6,3 +6,5 @@ venv/
 .env
 .idea/
 .vscode/
+audio_prompts/
+temp_gradio_audio/
