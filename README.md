@@ -77,7 +77,7 @@ pip install -r requirements-cuda.txt
 
 ## Quick Start
 
-### Gradio UI (Windows-friendly)
+### Gradio UI (Voxta config in the bottom)
 
 From an activated virtual environment in the repo root:
 
@@ -110,7 +110,7 @@ speaker_audio = load_audio("speaker.wav").cuda()
 # Configure sampler
 sample_fn = partial(
     sample_euler_cfg_independent_guidances,
-    num_steps=40,
+    num_steps=20,
     cfg_scale_text=3.0,
     cfg_scale_speaker=8.0,
     cfg_min_t=0.5,
