@@ -10,6 +10,8 @@ This fork of Echo‑TTS is optimized for Windows users and for integration with
 - A **Voxta provider JSON generator** directly in the UI
 - **GPU / CPU selection with persistence** across runs
 - **Low-VRAM safeguards** tuned for ≈8 GB GPUs
+- A **Windows-tested install path** (Python 3.13+, CUDA 12.4 wheels option)
+- A **robust audio prompt library** with drag-and-drop **multi-file upload**
 
 All of this is layered on top of the original Echo‑TTS model behavior.
 
@@ -87,6 +89,12 @@ pip install -r requirements-cuda.txt
 > "Low VRAM Mode" that uses bfloat16 and conservative sequence lengths to
 > reduce out-of-memory errors on smaller GPUs.
 
+> **Windows audio backend / codec notes**
+> This fork replaces the older TorchCodec-based audio path with a
+> **torchaudio + FFmpeg** pipeline that has been tested on Windows. This
+> avoids several Windows-specific codec issues and makes reference audio
+> loading more robust (mono downmix + 44.1 kHz resampling).
+
 ## Quick Start
 
 ### Gradio UI (Voxta config in the bottom)
@@ -101,6 +109,10 @@ Once the UI is open:
 
 - **Add your voice samples** (WAV/MP3) into the `audio_prompts/` folder so
     they appear in the reference dropdown.
+    - You can now do this directly in the UI:
+        - Use the **Speaker Reference → Add Audio Prompts** panel.
+        - Drag & drop or select multiple files.
+        - Click **Upload Voice Files** to copy them into `audio_prompts/`.
 - **Scroll to the bottom** of the Gradio interface to find the
     **"Voxta / HTTP API Integration"** section, where you can start/stop the
     built-in API server and generate a ready-to-paste Voxta provider config.
@@ -250,6 +262,66 @@ configuration to connect Echo-TTS as a TTS backend.
 > This fork's HTTP API design is inspired by, but separate from, the
 > official Echo-TTS API implementation:
 > https://github.com/KevinAHM/echo-tts-api
+
+---
+
+## Changelog (fork highlights)
+
+This is a hand-written summary of the most important changes in this fork
+relative to the original Echo‑TTS repo.
+
+### 2025-12-06 — Windows / Voxta polish & prompt uploader
+
+- **Multi-file prompt upload in the UI**
+        - Added a **Speaker Reference → Add Audio Prompts** panel.
+        - You can drag & drop or select multiple audio files and click
+            **Upload Voice Files** to copy them into `audio_prompts/`.
+        - The **Audio Library** table refreshes automatically and shows a clear
+            status message (e.g. "Uploaded 3 files into audio_prompts/").
+- **Improved Voxta / HTTP API panel**
+        - The **"🔌 Echo-TTS API Server & Voxta Config"** accordion now opens by
+            default so you can see it immediately.
+        - Start/stop actions show clearer status text with indicators:
+            `🟢` running/already running, `🟡` stopping, `🔴` stopped, `⚠️` errors.
+
+### 2025-12-05 — Windows install & CUDA wheels
+
+- **CUDA 12.4 requirements**
+        - Added `requirements-cuda.txt` that pins `torch==2.6.0+cu124` and
+            `torchaudio==2.6.0+cu124` and uses the official PyTorch CUDA index
+            for those wheels.
+        - All other packages (e.g. `safetensors`, `gradio`, `fastapi`) are
+            pulled from PyPI to avoid resolution issues.
+- **Windows-friendly Python recommendation**
+        - README now recommends **Python 3.13+** on Windows and links directly to
+            the official downloads page.
+        - Example venv commands and a note about Windows long path support.
+
+### 2025-12-04 — Audio pipeline & tail behavior
+
+- **Audio backend / codec fix**
+        - Removed the TorchCodec-based audio I/O path.
+        - Switched to **torchaudio + FFmpeg** for decoding, mono downmixing, and
+            44.1 kHz resampling to avoid Windows codec issues.
+- **Tail noise and long-output tweaks**
+        - Generation now adds a small silence tail and optional fade-out to
+            reduce static/noise at the end of clips, especially noticeable when
+            used as a streaming TTS backend.
+
+### 2025-12-03 — Devices, low VRAM & API integration
+
+- **Low VRAM mode and device persistence**
+        - Added a **Low VRAM Mode (<= 8GB)** toggle that uses `bfloat16` and
+            conservative sequence lengths, persisted in `runtime_config.json`.
+        - Added a **GPU / CPU selector** whose choice is stored in
+            `device_config.json` and used by both the UI and the HTTP API.
+        - Implemented OOM-aware multi-GPU fallback (primary → other GPUs → CPU).
+- **HTTP API + Voxta helper**
+        - Added the FastAPI-based `api_server.py` with:
+                - `POST /tts` for Voxta/ChatterBox-style TTS.
+                - `GET /get_predefined_voices` reading from `audio_prompts/`.
+        - Added a **Voxta provider JSON generator** panel in the Gradio UI to
+            quickly produce a Voxta-compatible provider config.
 
 ## Tips
 

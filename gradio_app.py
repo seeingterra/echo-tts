@@ -939,6 +939,67 @@ def select_audio_prompt_file(evt: gr.SelectData):
     return gr.update()
 
 
+def upload_audio_prompts(files):
+    """Save uploaded audio files into the AUDIO_PROMPT_FOLDER and refresh the table.
+
+    Gradio passes a list of file dicts for `gr.Files`, each with `name` and
+    `path` keys. We copy them into the prompts folder and return the updated
+    table plus a human-readable status message.
+    """
+    if AUDIO_PROMPT_FOLDER is None:
+        return gr.update(), "Audio prompt folder is not configured."
+
+    AUDIO_PROMPT_FOLDER.mkdir(parents=True, exist_ok=True)
+
+    if not files:
+        return gr.update(value=get_audio_prompt_files()), "No files provided to upload."
+
+    import shutil
+    from pathlib import Path
+
+    saved = 0
+    for f in files:
+        # Gradio's Files can yield different types depending on version:
+        #  - dict-like: {"name": ..., "path": ...}
+        #  - NamedString / str: path to the temp file
+        #  - object with .name / .path attributes
+        name = None
+        src = None
+
+        # dict-like
+        if isinstance(f, dict):
+            name = f.get("name")
+            src = f.get("path")
+        else:
+            # hasattr-style access first
+            if hasattr(f, "name"):
+                name = getattr(f, "name")
+            if hasattr(f, "path"):
+                src = getattr(f, "path")
+
+            # Fallback: treat as a plain path string
+            if src is None and isinstance(f, (str, bytes)):
+                src = f
+
+        if not src:
+            continue
+
+        if not name:
+            name = Path(src).name or "uploaded_audio"
+
+        name = Path(name).name
+        dest = AUDIO_PROMPT_FOLDER / name
+        try:
+            shutil.copyfile(src, dest)
+            saved += 1
+        except Exception:
+            # Best-effort; skip problematic files.
+            continue
+
+    status = "Uploaded 0 files." if saved == 0 else f"Uploaded {saved} file{'s' if saved != 1 else ''} into audio_prompts/."
+    return gr.update(value=get_audio_prompt_files()), status
+
+
 # UI styling and helpers
 LINK_CSS = """
 .preset-inline { display:flex; align-items:baseline; gap:6px; margin-top:-4px; margin-bottom:-12px; }
@@ -1195,8 +1256,8 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
 
     gr.Markdown("# Speaker Reference")
     with gr.Row():
-        if AUDIO_PROMPT_FOLDER is not None and AUDIO_PROMPT_FOLDER.exists():
-            with gr.Column(scale=1, min_width=200):
+        with gr.Column(scale=1, min_width=220):
+            if AUDIO_PROMPT_FOLDER is not None:
                 gr.Markdown("#### Audio Library (click to load)")
                 audio_prompt_search = gr.Textbox(
                     label="",
@@ -1213,6 +1274,15 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
                     interactive=False,
                     label="",
                 )
+
+                gr.Markdown("#### Add Audio Prompts")
+                audio_prompt_uploader = gr.Files(
+                    label="Drag & drop or select audio files",
+                    file_count="multiple",
+                    file_types=["audio"],
+                )
+                upload_btn = gr.Button("Upload Voice Files", variant="secondary")
+                upload_status = gr.Markdown("", visible=False)
         with gr.Column(scale=2):
             custom_audio_input = gr.Audio(
                 sources=["upload", "microphone"],
@@ -1446,7 +1516,7 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
     gr.HTML('<hr class="section-separator">')
     gr.Markdown("# Voxta / HTTP API Integration")
 
-    with gr.Accordion("🔌 Echo-TTS API Server & Voxta Config", open=False):
+    with gr.Accordion("🔌 Echo-TTS API Server & Voxta Config", open=True):
         with gr.Row():
             with gr.Column(scale=1):
                 api_host = gr.Textbox(label="API Host", value="http://localhost", lines=1)
@@ -1455,15 +1525,22 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
 
                 start_api_btn = gr.Button("Start API Server", variant="primary")
                 stop_api_btn = gr.Button("Stop API Server")
-                api_status = gr.Markdown("API server status: idle")
+                api_status = gr.Markdown("🔴 API server is stopped.")
 
                 def _start_api(host, port):
                     msg = start_api_server(host, int(port))
-                    return f"API server status: {msg}"
+                    # Heuristic based on the returned text to pick an indicator.
+                    if "Started API server" in msg or "already running" in msg:
+                        return f"🟢 {msg}"
+                    return f"🔴 {msg}"
 
                 def _stop_api():
                     msg = stop_api_server()
-                    return f"API server status: {msg}"
+                    if "Stopped API server" in msg:
+                        return f"🟡 {msg}"
+                    if "not running" in msg:
+                        return f"🔴 {msg}"
+                    return f"⚠️ {msg}"
 
                 start_api_btn.click(_start_api, inputs=[api_host, api_port], outputs=[api_status])
                 stop_api_btn.click(_stop_api, inputs=None, outputs=[api_status])
@@ -1483,9 +1560,17 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
                 )
 
     # Event handlers
-    if AUDIO_PROMPT_FOLDER is not None and AUDIO_PROMPT_FOLDER.exists():
+    if AUDIO_PROMPT_FOLDER is not None:
         audio_prompt_table.select(select_audio_prompt_file, outputs=[custom_audio_input])
         audio_prompt_search.change(filter_audio_prompts, inputs=[audio_prompt_search], outputs=[audio_prompt_table])
+
+        # When users click the upload button, save selected files into audio_prompts/
+        # and refresh the table with a clear status message.
+        def _on_upload(files):
+            table_update, status = upload_audio_prompts(files)
+            return table_update, gr.update(value=status, visible=True)
+
+        upload_btn.click(_on_upload, inputs=[audio_prompt_uploader], outputs=[audio_prompt_table, upload_status])
 
     text_presets_table.select(select_text_preset, outputs=text_prompt)
 
