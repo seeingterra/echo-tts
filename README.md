@@ -270,6 +270,18 @@ configuration to connect Echo-TTS as a TTS backend.
 This is a hand-written summary of the most important changes in this fork
 relative to the original Echo‑TTS repo.
 
+### 2025-12-07 — num_steps for Voxta / HTTP API
+
+- **Configurable diffusion steps from Voxta**
+        - Extended the HTTP API request model (`TTSRequest`) to accept an
+            optional `num_steps` field.
+        - The FastAPI server now passes `num_steps` into the sampler and clamps
+            it to a safe range (5–80 steps) per request.
+        - Updated the generated Voxta provider JSON so it includes
+            `"num_steps": 20` in the `RequestBody` by default.
+        - This lets you tune quality vs. latency for different use cases
+            directly from Voxta.
+
 ### 2025-12-06 — Windows / Voxta polish & prompt uploader
 
 - **Multi-file prompt upload in the UI**
@@ -322,6 +334,53 @@ relative to the original Echo‑TTS repo.
                 - `GET /get_predefined_voices` reading from `audio_prompts/`.
         - Added a **Voxta provider JSON generator** panel in the Gradio UI to
             quickly produce a Voxta-compatible provider config.
+
+---
+
+## Updating an existing installation
+
+If you already cloned this repo and want to pull in the latest changes
+(Windows fixes, CUDA wheels, Voxta improvements, prompt uploader, etc.):
+
+1. **Activate your virtual environment** (if not already):
+
+    ```powershell
+    cd J:\AITools\echo-tts
+    venv\Scripts\activate
+    ```
+
+2. **Update from GitHub**:
+
+    ```powershell
+    git pull origin main
+    ```
+
+3. **(Recommended) Reinstall / refresh dependencies** in case
+   `requirements.txt` or `requirements-cuda.txt` changed:
+
+    ```powershell
+    pip install -r requirements.txt
+    ```
+
+    Or, if you use the CUDA wheels on Windows:
+
+    ```powershell
+    pip install -r requirements-cuda.txt
+    ```
+
+4. **Restart the app** so the new code is loaded:
+
+    ```powershell
+    python gradio_app.py
+    ```
+
+If `git pull` reports local changes you don’t care about, you can discard
+them with:
+
+```powershell
+git restore .
+git pull origin main
+```
 
 ## Tips
 
