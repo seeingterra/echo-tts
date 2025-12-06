@@ -70,6 +70,16 @@ On Windows with NVIDIA GPU (CUDA 12.4 wheels):
 pip install -r requirements-cuda.txt
 ```
 
+> **Windows tip: long path support**
+> Some Python packages (and virtual environments) can hit Windows' default
+> path length limit and fail with odd file/path errors. Enabling "LongPaths"
+> support in Windows and using a short base path like `C:\dev\echo-tts` can
+> help. See:
+> - Windows 10/11 Group Policy: `Local Computer Policy → Computer Configuration
+>   → Administrative Templates → System → Filesystem → Enable Win32 long paths`
+> - Or set `LongPathsEnabled = 1` under
+>   `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem`
+
 > **VRAM**
 > Echo-TTS is tuned here for GPUs with **≈8GB VRAM or more**. The fork adds a
 > "Low VRAM Mode" that uses bfloat16 and conservative sequence lengths to
