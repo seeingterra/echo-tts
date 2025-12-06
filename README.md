@@ -6,7 +6,7 @@ This fork of Echo‑TTS is optimized for Windows users and for integration with
 [Voxta.ai](https://voxta.ai). It builds on the original Gradio UI and adds:
 
 - A **Windows-friendly Gradio UI** with sensible defaults
-- A **Voxta/ChatterBox-compatible HTTP TTS API**
+- A **Voxta compatible HTTP TTS API**
 - A **Voxta provider JSON generator** directly in the UI
 - **GPU / CPU selection with persistence** across runs
 - **Low-VRAM safeguards** tuned for ≈8 GB GPUs
