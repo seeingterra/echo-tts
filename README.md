@@ -270,7 +270,7 @@ configuration to connect Echo-TTS as a TTS backend.
 This is a hand-written summary of the most important changes in this fork
 relative to the original Echo‑TTS repo.
 
-### 2025-12-07 — num_steps for Voxta / HTTP API
+### 2025-12-06 — num_steps for Voxta / HTTP API
 
 - **Configurable diffusion steps from Voxta**
         - Extended the HTTP API request model (`TTSRequest`) to accept an
@@ -296,7 +296,7 @@ relative to the original Echo‑TTS repo.
         - Start/stop actions show clearer status text with indicators:
             `🟢` running/already running, `🟡` stopping, `🔴` stopped, `⚠️` errors.
 
-### 2025-12-05 — Windows install & CUDA wheels
+### 2025-12-06 — Windows install & CUDA wheels
 
 - **CUDA 12.4 requirements**
         - Added `requirements-cuda.txt` that pins `torch==2.6.0+cu124` and
@@ -309,7 +309,7 @@ relative to the original Echo‑TTS repo.
             the official downloads page.
         - Example venv commands and a note about Windows long path support.
 
-### 2025-12-04 — Audio pipeline & tail behavior
+### 2025-12-06 — Audio pipeline & tail behavior
 
 - **Audio backend / codec fix**
         - Removed the TorchCodec-based audio I/O path.
@@ -320,7 +320,7 @@ relative to the original Echo‑TTS repo.
             reduce static/noise at the end of clips, especially noticeable when
             used as a streaming TTS backend.
 
-### 2025-12-03 — Devices, low VRAM & API integration
+### 2025-12-06 — Devices, low VRAM & API integration
 
 - **Low VRAM mode and device persistence**
         - Added a **Low VRAM Mode (<= 8GB)** toggle that uses `bfloat16` and
