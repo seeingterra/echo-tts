@@ -11,7 +11,7 @@ This fork of Echo‑TTS is optimized for Windows users and for integration with
 - **GPU / CPU selection with persistence** across runs
 - **Low-VRAM safeguards** tuned for ≈8 GB GPUs
 - A **Windows-tested install path** (Python 3.13+, CUDA 12.4 wheels option)
-- A **robust audio prompt library** with drag-and-drop **multi-file upload**
+- Added to ** audio prompt library** with drag-and-drop **multi-file upload**
 
 All of this is layered on top of the original Echo‑TTS model behavior.
 
@@ -35,7 +35,7 @@ technical details.
 
 ## Original README (upstream project)
 
-> The following is the original README content from the upstream
+> The following is the modified original README content from the upstream
 > `jordand/echo-tts` repository, preserved here for reference.
 
 ## Responsible Use
