@@ -77,8 +77,8 @@ else:
 DEFAULT_SAMPLE_LATENT_LENGTH = 576  # (example, ~27 seconds rather than ~30; can change depending on what fits in VRAM)
 
 # Additional low-VRAM safety limits (tuned for ~8GB GPUs)
-MAX_SAFE_LATENT_LENGTH = 576
-MAX_SAFE_STEPS = 48
+MAX_SAFE_LATENT_LENGTH = 500
+MAX_SAFE_STEPS = 40
 MAX_SPEAKER_SECONDS = 120  # max duration of reference audio passed to the model
 
 # NOTE peak S1-DAC decoding VRAM > peak latent sampling VRAM, so decoding in chunks (which is posisble as S1-DAC is causal) would allow for full 640-length generation on lower VRAM GPUs
@@ -1161,6 +1161,7 @@ def generate_voxta_config(label: str, host: str, port: int, fmt: str) -> str:
         '"exaggeration": 0.8,\n'
         '"cfg_weight": 0.5,\n'
         '"seed": 0, "speed_factor": 1,\n'
+        '"num_steps": 20,\n'
         '"culture": "{{ culture }}",\n'
         '"language": "{{ language }}"\n'
         "}"

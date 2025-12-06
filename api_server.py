@@ -35,6 +35,7 @@ class TTSRequest(BaseModel):
     speed_factor: float = 1.0
     culture: Optional[str] = None
     language: Optional[str] = None
+    num_steps: Optional[int] = None
 
 
 @app.get("/get_predefined_voices")
@@ -61,6 +62,7 @@ def _synthesize_to_path(
     speaker_audio_path: Optional[str],
     output_format: str,
     seed: int,
+    num_steps: Optional[int] = None,
 ) -> Path:
     """Generate audio using the shared synthesize_to_file helper with OOM fallback.
 
@@ -70,7 +72,10 @@ def _synthesize_to_path(
 
     # Conservative defaults tuned for short, Voxta-style utterances.
     # These are slightly lower than the UI defaults to reduce tail noise.
-    num_steps = 20
+    # If the request provides num_steps, clamp it to a safe range.
+    if num_steps is None:
+        num_steps = 20
+    num_steps = max(5, min(int(num_steps), 80))
     cfg_scale_text = 3.0
     cfg_scale_speaker = 3.0
     cfg_min_t = 0.5
@@ -188,6 +193,7 @@ async def tts(req: TTSRequest):
             speaker_audio_path=speaker_path,
             output_format=fmt,
             seed=req.seed,
+            num_steps=req.num_steps,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {e}")
