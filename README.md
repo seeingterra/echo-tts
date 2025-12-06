@@ -95,6 +95,14 @@ From an activated virtual environment in the repo root:
 python gradio_app.py
 ```
 
+Once the UI is open:
+
+- **Add your voice samples** (WAV/MP3) into the `audio_prompts/` folder so
+    they appear in the reference dropdown.
+- **Scroll to the bottom** of the Gradio interface to find the
+    **"Voxta / HTTP API Integration"** section, where you can start/stop the
+    built-in API server and generate a ready-to-paste Voxta provider config.
+
 ### Python API
 
 ```python
