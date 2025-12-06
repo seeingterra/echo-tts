@@ -46,7 +46,9 @@ You are responsible for complying with local laws regarding biometric data and v
 
 ## Installation
 
-Requires Python 3.10+.
+Tested and recommended with **Python 3.13+**.
+You can download the latest Python 3.13 installer for Windows from:
+https://www.python.org/downloads/windows/
 
 The **recommended setup on Windows** is to use a dedicated virtual
 environment for this project:
