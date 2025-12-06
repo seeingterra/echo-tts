@@ -36,7 +36,7 @@ technical details.
 ## Original README (upstream project)
 
 > The following is the modified original README content from the upstream
-> `jordand/echo-tts` repository, preserved here for reference.
+> `jordand/echo-tts` repository, partially preserved here for reference.
 
 ## Responsible Use
 
