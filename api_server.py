@@ -35,7 +35,25 @@ class TTSRequest(BaseModel):
     speed_factor: float = 1.0
     culture: Optional[str] = None
     language: Optional[str] = None
+    # Backward-compatible knob (some clients send this) for number of steps.
     num_steps: Optional[int] = None
+
+    # --- Echo-TTS / inference parameters (complete set) ---
+    # If a field is omitted, api_server uses conservative defaults tuned for Voxta-style utterances.
+    # If a field is explicitly provided, it overrides the default.
+    rng_seed: Optional[int] = None
+    cfg_scale_text: Optional[float] = None
+    cfg_scale_speaker: Optional[float] = None
+    cfg_mode: Optional[str] = None  # independent | joint-unconditional | apg-independent
+    cfg_min_t: Optional[float] = None
+    cfg_max_t: Optional[float] = None
+    truncation_factor: Optional[float] = None
+    rescale_k: Optional[float] = None
+    rescale_sigma: Optional[float] = None
+    speaker_kv_scale: Optional[float] = None
+    speaker_kv_max_layers: Optional[int] = None
+    speaker_kv_min_t: Optional[float] = None
+    sequence_length: Optional[int] = None
 
 
 @app.get("/get_predefined_voices")
@@ -63,6 +81,20 @@ def _synthesize_to_path(
     output_format: str,
     seed: int,
     num_steps: Optional[int] = None,
+    *,
+    rng_seed: Optional[int] = None,
+    cfg_scale_text: Optional[float] = None,
+    cfg_scale_speaker: Optional[float] = None,
+    cfg_mode: Optional[str] = None,
+    cfg_min_t: Optional[float] = None,
+    cfg_max_t: Optional[float] = None,
+    truncation_factor: Optional[float] = None,
+    rescale_k: Optional[float] = None,
+    rescale_sigma: Optional[float] = None,
+    speaker_kv_scale: Optional[float] = None,
+    speaker_kv_max_layers: Optional[int] = None,
+    speaker_kv_min_t: Optional[float] = None,
+    sequence_length: Optional[int] = None,
 ) -> Path:
     """Generate audio using the shared synthesize_to_file helper with OOM fallback.
 
@@ -76,13 +108,25 @@ def _synthesize_to_path(
     if num_steps is None:
         num_steps = 20
     num_steps = max(5, min(int(num_steps), 80))
-    cfg_scale_text = 3.0
-    cfg_scale_speaker = 3.0
-    cfg_min_t = 0.5
-    cfg_max_t = 1.0
-    truncation_factor = 0.8
-    rescale_k = 1.2
-    rescale_sigma = 3.0
+    # Prefer rng_seed if provided (Echo-TTS naming), otherwise use seed.
+    effective_seed = seed if rng_seed is None else int(rng_seed)
+
+    # CFG settings
+    cfg_scale_text = 3.0 if cfg_scale_text is None else float(cfg_scale_text)
+    cfg_scale_speaker = cfg_scale_text if cfg_scale_speaker is None else float(cfg_scale_speaker)
+    cfg_mode_norm = (cfg_mode or "independent").strip().lower()
+    if cfg_mode_norm not in {"independent", "joint-unconditional", "apg-independent"}:
+        cfg_mode_norm = "independent"
+    cfg_min_t = 0.5 if cfg_min_t is None else float(cfg_min_t)
+    cfg_max_t = 1.0 if cfg_max_t is None else float(cfg_max_t)
+
+    # Noise truncation (initial noise scaling)
+    truncation_factor = 0.8 if truncation_factor is None else float(truncation_factor)
+
+    # Temporal score rescaling (optional)
+    # synthesize_to_file treats rescale_k==1.0 as disabled.
+    rescale_k = 1.2 if rescale_k is None else float(rescale_k)
+    rescale_sigma = 3.0 if rescale_sigma is None else float(rescale_sigma)
     force_speaker = bool(speaker_audio_path)
     speaker_kv_scale = 1.2
     speaker_kv_min_t = 0.9
@@ -94,7 +138,14 @@ def _synthesize_to_path(
 
     # Slightly shorter than UI default to keep clips tight and avoid noisy tails.
     base_len = int(DEFAULT_SAMPLE_LATENT_LENGTH)
-    sample_latent_length = str(max(384, base_len - 32))
+    if sequence_length is not None:
+        try:
+            seq_len = int(sequence_length)
+        except Exception:
+            seq_len = max(384, base_len - 32)
+        sample_latent_length = str(max(128, seq_len))
+    else:
+        sample_latent_length = str(max(384, base_len - 32))
     use_compile = False
     show_original_audio = False
     session_id = "api"
@@ -119,9 +170,10 @@ def _synthesize_to_path(
                 text_prompt=text,
                 speaker_audio_path=speaker_audio_path or "",
                 num_steps=num_steps,
-                rng_seed=seed,
+                rng_seed=effective_seed,
                 cfg_scale_text=cfg_scale_text,
                 cfg_scale_speaker=cfg_scale_speaker,
+                cfg_mode=cfg_mode_norm,
                 cfg_min_t=cfg_min_t,
                 cfg_max_t=cfg_max_t,
                 truncation_factor=truncation_factor,
@@ -187,6 +239,39 @@ async def tts(req: TTSRequest):
     if fmt not in {"wav", "mp3"}:
         fmt = "wav"
 
+    # Field-set-aware compatibility behavior:
+    # - If a client explicitly sends legacy fields (temperature/exaggeration/cfg_weight), we map them
+    #   to the new parameter set unless the new fields are also provided.
+    fields_set = getattr(req, "__fields_set__", set())
+
+    # Legacy cfg_weight -> cfg_scale_text (when cfg_scale_text not provided)
+    cfg_scale_text = req.cfg_scale_text
+    if cfg_scale_text is None and "cfg_weight" in fields_set:
+        # Preserve historical default mapping: cfg_weight=0.5 -> cfg_scale=3.0
+        # Map [0..2] roughly into [1..9].
+        w = float(req.cfg_weight)
+        w = max(0.0, min(2.0, w))
+        cfg_scale_text = 1.0 + (4.0 * w)
+
+    # Legacy exaggeration -> speaker cfg boost (only when cfg_scale_speaker is not provided)
+    cfg_scale_speaker = req.cfg_scale_speaker
+    if cfg_scale_speaker is None and cfg_scale_text is not None and "exaggeration" in fields_set:
+        ex = float(req.exaggeration)
+        speaker_cfg_mult = max(0.1, min(3.0, 0.5 + ex))
+        cfg_scale_speaker = float(cfg_scale_text) * speaker_cfg_mult
+
+    # Legacy temperature -> truncation_factor (when truncation_factor not provided)
+    truncation_factor = req.truncation_factor
+    if truncation_factor is None and "temperature" in fields_set:
+        truncation_factor = float(req.temperature)
+
+    # If either rescale parameter is explicitly provided as null, disable rescaling.
+    rescale_k = req.rescale_k
+    rescale_sigma = req.rescale_sigma
+    if ("rescale_k" in fields_set or "rescale_sigma" in fields_set) and (rescale_k is None or rescale_sigma is None):
+        rescale_k = 1.0
+        rescale_sigma = 1.0
+
     try:
         audio_path = _synthesize_to_path(
             text=req.text,
@@ -194,6 +279,19 @@ async def tts(req: TTSRequest):
             output_format=fmt,
             seed=req.seed,
             num_steps=req.num_steps,
+            rng_seed=req.rng_seed,
+            cfg_scale_text=cfg_scale_text,
+            cfg_scale_speaker=cfg_scale_speaker,
+            cfg_mode=req.cfg_mode,
+            cfg_min_t=req.cfg_min_t,
+            cfg_max_t=req.cfg_max_t,
+            truncation_factor=truncation_factor,
+            rescale_k=rescale_k,
+            rescale_sigma=rescale_sigma,
+            speaker_kv_scale=req.speaker_kv_scale,
+            speaker_kv_max_layers=req.speaker_kv_max_layers,
+            speaker_kv_min_t=req.speaker_kv_min_t,
+            sequence_length=req.sequence_length,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {e}")

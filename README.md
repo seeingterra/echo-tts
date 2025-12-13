@@ -212,10 +212,29 @@ Voxta / ChatterBox-style TTS integrations.
             "output_format": "wav",
             "split_text": false,
             "chunk_size": 120,
+
+            // Legacy knobs (still accepted; mapped to the full parameter set if you don't send the new fields)
             "temperature": 0.8,
             "exaggeration": 0.8,
             "cfg_weight": 0.5,
             "seed": 0,
+
+            // Preferred Echo-TTS parameters
+            "num_steps": 20,
+            "rng_seed": 0,
+            "cfg_mode": "independent", // independent | joint-unconditional | apg-independent
+            "cfg_scale_text": 3.0,
+            "cfg_scale_speaker": null,
+            "cfg_min_t": 0.5,
+            "cfg_max_t": 1.0,
+            "truncation_factor": null,
+            "rescale_k": null,
+            "rescale_sigma": null,
+            "speaker_kv_scale": null,
+            "speaker_kv_min_t": null,
+            "speaker_kv_max_layers": null,
+            "sequence_length": null,
+
             "speed_factor": 1.0,
             "culture": "en-US",
             "language": "en"
@@ -225,6 +244,7 @@ Voxta / ChatterBox-style TTS integrations.
     - Returns raw audio bytes (`audio/wav` or `audio/mpeg`) on success.
     - Uses the same device / low-VRAM configuration and OOM-aware fallback
         as the Gradio UI.
+    - `rng_seed` (if provided) takes precedence over `seed`.
 
 - `GET /get_predefined_voices`
     - Scans the `audio_prompts/` folder for supported audio files and returns a
