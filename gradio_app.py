@@ -32,6 +32,8 @@ from inference import (
     compile_model,
     compile_fish_ae,
     sample_euler_cfg_independent_guidances,
+    sample_euler_cfg_joint_unconditional,
+    sample_euler_cfg_apg_independent,
 )
 
 def load_runtime_config() -> dict:
@@ -402,6 +404,7 @@ def synthesize_to_file(
     show_original_audio: bool,
     session_id: str,
     fade_out_seconds: float = 0.0,
+    cfg_mode: str = "independent",
 ):
     """Core generation logic assuming models are already on the correct device.
 
@@ -481,9 +484,16 @@ def synthesize_to_file(
     # Hard safety cap for low-VRAM GPUs to reduce OOM risk
     sample_latent_length_val = min(sample_latent_length_val, MAX_SAFE_LATENT_LENGTH)
 
-    
+    cfg_mode_norm = (cfg_mode or "independent").strip().lower()
+    if cfg_mode_norm == "joint-unconditional":
+        sampler = sample_euler_cfg_joint_unconditional
+    elif cfg_mode_norm == "apg-independent":
+        sampler = sample_euler_cfg_apg_independent
+    else:
+        sampler = sample_euler_cfg_independent_guidances
+
     sample_fn = partial(
-        sample_euler_cfg_independent_guidances,
+        sampler,
         num_steps=num_steps_int,
         cfg_scale_text=cfg_scale_text_val,
         cfg_scale_speaker=cfg_scale_speaker_val,

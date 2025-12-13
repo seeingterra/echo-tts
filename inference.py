@@ -371,6 +371,43 @@ def _temporal_score_rescale(
     return v_pred
 
 
+def _apg_project(v0: torch.Tensor, v1: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    # Generic projection of v0 onto v1 and its orthogonal complement.
+    # Works for tensors shaped like (B, ...) where the remaining dims are treated as a vector.
+    reduce_dims = tuple(range(1, v0.ndim))
+    eps = 1e-12
+    v1_norm = v1.norm(p=2, dim=reduce_dims, keepdim=True).clamp_min(eps)
+    v1_unit = v1 / v1_norm
+    v0_parallel = (v0 * v1_unit).sum(dim=reduce_dims, keepdim=True) * v1_unit
+    v0_orthogonal = v0 - v0_parallel
+    return v0_parallel, v0_orthogonal
+
+
+def _apg_normalized_update(
+    pred_cond: torch.Tensor,
+    pred_uncond: torch.Tensor,
+    *,
+    eta: float = 1.0,
+    norm_threshold: float | None = None,
+) -> torch.Tensor:
+    # Adaptive Projected Guidance (APG) normalized update direction.
+    # Paper pseudocode returns pred_cond + (guidance_scale - 1) * normalized_update.
+    # In this repo we use pred_cond + cfg_scale * update, so callers should multiply by cfg_scale.
+    diff = pred_cond - pred_uncond
+
+    if norm_threshold is not None and norm_threshold > 0:
+        reduce_dims = tuple(range(1, diff.ndim))
+        diff_norm = diff.norm(p=2, dim=reduce_dims, keepdim=True).clamp_min(1e-12)
+        scale_factor = torch.minimum(
+            torch.ones_like(diff_norm),
+            torch.tensor(norm_threshold, device=diff.device, dtype=diff_norm.dtype) / diff_norm,
+        )
+        diff = diff * scale_factor
+
+    diff_parallel, diff_orthogonal = _apg_project(diff, pred_cond)
+    return diff_orthogonal + float(eta) * diff_parallel
+
+
 @torch.inference_mode()
 def sample_euler_cfg_independent_guidances(
     model: EchoDiT,
@@ -457,6 +494,191 @@ def sample_euler_cfg_independent_guidances(
         # optional kv speaker scaling
         if speaker_kv_scale is not None and t_next < speaker_kv_min_t and t >= speaker_kv_min_t:
             _multiply_kv_cache(kv_speaker_cond, 1. / speaker_kv_scale, speaker_kv_max_layers)
+            kv_speaker_full = _concat_kv_caches(kv_speaker_cond, kv_speaker_cond, kv_speaker_cond)
+
+        x_t = x_t + v_pred * (t_next - t)
+
+    return x_t
+
+
+@torch.inference_mode()
+def sample_euler_cfg_joint_unconditional(
+    model: EchoDiT,
+    speaker_latent: torch.Tensor,
+    speaker_mask: torch.Tensor,
+    text_input_ids: torch.Tensor,
+    text_mask: torch.Tensor,
+    rng_seed: int,
+    num_steps: int,
+    cfg_scale_text: float,
+    cfg_scale_speaker: float,
+    cfg_min_t: float,
+    cfg_max_t: float,
+    truncation_factor: float | None,
+    rescale_k: float | None,
+    rescale_sigma: float | None,
+    speaker_kv_scale: float | None,
+    speaker_kv_max_layers: int | None,
+    speaker_kv_min_t: float | None,
+    sequence_length: int | None = None,
+) -> torch.Tensor:
+
+    if sequence_length is None:
+        sequence_length = 640
+
+    INIT_SCALE = 0.999
+
+    device, dtype = model.device, model.dtype
+    batch_size = text_input_ids.shape[0]
+
+    rng = torch.Generator(device=device).manual_seed(rng_seed)
+
+    t_schedule = torch.linspace(1.0, 0.0, num_steps + 1, device=device) * INIT_SCALE
+
+    text_mask_uncond = torch.zeros_like(text_mask)
+    speaker_mask_uncond = torch.zeros_like(speaker_mask)
+
+    kv_text_cond = model.get_kv_cache_text(text_input_ids, text_mask)
+    kv_speaker_cond = model.get_kv_cache_speaker(speaker_latent.to(dtype))
+
+    if speaker_kv_scale is not None:
+        _multiply_kv_cache(kv_speaker_cond, speaker_kv_scale, speaker_kv_max_layers)
+
+    kv_text_full = _concat_kv_caches(kv_text_cond, kv_text_cond)
+    kv_speaker_full = _concat_kv_caches(kv_speaker_cond, kv_speaker_cond)
+
+    full_text_mask = torch.cat([text_mask, text_mask_uncond], dim=0)
+    full_speaker_mask = torch.cat([speaker_mask, speaker_mask_uncond], dim=0)
+
+    x_t = torch.randn((batch_size, sequence_length, 80), device=device, dtype=torch.float32, generator=rng)
+    if truncation_factor is not None:
+        x_t = x_t * truncation_factor
+
+    joint_scale = float(cfg_scale_text) + float(cfg_scale_speaker)
+
+    for i in range(num_steps):
+        t, t_next = t_schedule[i], t_schedule[i + 1]
+
+        has_cfg = ((t >= cfg_min_t) * (t <= cfg_max_t)).item()
+
+        if has_cfg:
+            v_cond, v_uncond = model(
+                x=torch.cat([x_t, x_t], dim=0).to(dtype),
+                t=(torch.ones((batch_size * 2,), device=device) * t).to(dtype),
+                text_mask=full_text_mask,
+                speaker_mask=full_speaker_mask,
+                kv_cache_text=kv_text_full,
+                kv_cache_speaker=kv_speaker_full,
+            ).float().chunk(2, dim=0)
+            v_pred = v_cond + joint_scale * (v_cond - v_uncond)
+        else:
+            v_pred = model(
+                x=x_t.to(dtype),
+                t=(torch.ones((batch_size,), device=device) * t).to(dtype),
+                text_mask=text_mask,
+                speaker_mask=speaker_mask,
+                kv_cache_text=kv_text_cond,
+                kv_cache_speaker=kv_speaker_cond,
+            ).float()
+
+        if rescale_k is not None and rescale_sigma is not None:
+            v_pred = _temporal_score_rescale(v_pred, x_t, t, rescale_k, rescale_sigma)
+
+        if speaker_kv_scale is not None and t_next < speaker_kv_min_t and t >= speaker_kv_min_t:
+            _multiply_kv_cache(kv_speaker_cond, 1.0 / speaker_kv_scale, speaker_kv_max_layers)
+            kv_speaker_full = _concat_kv_caches(kv_speaker_cond, kv_speaker_cond)
+
+        x_t = x_t + v_pred * (t_next - t)
+
+    return x_t
+
+
+@torch.inference_mode()
+def sample_euler_cfg_apg_independent(
+    model: EchoDiT,
+    speaker_latent: torch.Tensor,
+    speaker_mask: torch.Tensor,
+    text_input_ids: torch.Tensor,
+    text_mask: torch.Tensor,
+    rng_seed: int,
+    num_steps: int,
+    cfg_scale_text: float,
+    cfg_scale_speaker: float,
+    cfg_min_t: float,
+    cfg_max_t: float,
+    truncation_factor: float | None,
+    rescale_k: float | None,
+    rescale_sigma: float | None,
+    speaker_kv_scale: float | None,
+    speaker_kv_max_layers: int | None,
+    speaker_kv_min_t: float | None,
+    sequence_length: int | None = None,
+) -> torch.Tensor:
+
+    if sequence_length is None:
+        sequence_length = 640
+
+    INIT_SCALE = 0.999
+
+    device, dtype = model.device, model.dtype
+    batch_size = text_input_ids.shape[0]
+
+    rng = torch.Generator(device=device).manual_seed(rng_seed)
+
+    t_schedule = torch.linspace(1.0, 0.0, num_steps + 1, device=device) * INIT_SCALE
+
+    text_mask_uncond = torch.zeros_like(text_mask)
+    speaker_mask_uncond = torch.zeros_like(speaker_mask)
+
+    kv_text_cond = model.get_kv_cache_text(text_input_ids, text_mask)
+    kv_speaker_cond = model.get_kv_cache_speaker(speaker_latent.to(dtype))
+
+    if speaker_kv_scale is not None:
+        _multiply_kv_cache(kv_speaker_cond, speaker_kv_scale, speaker_kv_max_layers)
+
+    kv_text_full = _concat_kv_caches(kv_text_cond, kv_text_cond, kv_text_cond)
+    kv_speaker_full = _concat_kv_caches(kv_speaker_cond, kv_speaker_cond, kv_speaker_cond)
+
+    full_text_mask = torch.cat([text_mask, text_mask_uncond, text_mask], dim=0)
+    full_speaker_mask = torch.cat([speaker_mask, speaker_mask, speaker_mask_uncond], dim=0)
+
+    x_t = torch.randn((batch_size, sequence_length, 80), device=device, dtype=torch.float32, generator=rng)
+    if truncation_factor is not None:
+        x_t = x_t * truncation_factor
+
+    for i in range(num_steps):
+        t, t_next = t_schedule[i], t_schedule[i + 1]
+
+        has_cfg = ((t >= cfg_min_t) * (t <= cfg_max_t)).item()
+
+        if has_cfg:
+            v_cond, v_uncond_text, v_uncond_speaker = model(
+                x=torch.cat([x_t, x_t, x_t], dim=0).to(dtype),
+                t=(torch.ones((batch_size * 3,), device=device) * t).to(dtype),
+                text_mask=full_text_mask,
+                speaker_mask=full_speaker_mask,
+                kv_cache_text=kv_text_full,
+                kv_cache_speaker=kv_speaker_full,
+            ).float().chunk(3, dim=0)
+
+            upd_text = _apg_normalized_update(v_cond, v_uncond_text)
+            upd_speaker = _apg_normalized_update(v_cond, v_uncond_speaker)
+            v_pred = v_cond + float(cfg_scale_text) * upd_text + float(cfg_scale_speaker) * upd_speaker
+        else:
+            v_pred = model(
+                x=x_t.to(dtype),
+                t=(torch.ones((batch_size,), device=device) * t).to(dtype),
+                text_mask=text_mask,
+                speaker_mask=speaker_mask,
+                kv_cache_text=kv_text_cond,
+                kv_cache_speaker=kv_speaker_cond,
+            ).float()
+
+        if rescale_k is not None and rescale_sigma is not None:
+            v_pred = _temporal_score_rescale(v_pred, x_t, t, rescale_k, rescale_sigma)
+
+        if speaker_kv_scale is not None and t_next < speaker_kv_min_t and t >= speaker_kv_min_t:
+            _multiply_kv_cache(kv_speaker_cond, 1.0 / speaker_kv_scale, speaker_kv_max_layers)
             kv_speaker_full = _concat_kv_caches(kv_speaker_cond, kv_speaker_cond, kv_speaker_cond)
 
         x_t = x_t + v_pred * (t_next - t)
