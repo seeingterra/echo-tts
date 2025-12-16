@@ -70,16 +70,22 @@ if LOW_VRAM_DEFAULT:
     # 8GB-friendly defaults
     MODEL_DTYPE = torch.bfloat16
     FISH_AE_DTYPE = torch.bfloat16
+    DEFAULT_SAMPLE_LATENT_LENGTH = 576  # ~27s (safer default on 8GB)
 else:
     # Higher precision mode (more VRAM, slightly higher quality)
     MODEL_DTYPE = torch.float32
     FISH_AE_DTYPE = torch.float32
 
-#EFAULT_SAMPLE_LATENT_LENGTH = 640 # decrease if OOM on 8GB vram GPU
-DEFAULT_SAMPLE_LATENT_LENGTH = 576  # (example, ~27 seconds rather than ~30; can change depending on what fits in VRAM)
+    # Prefer the full in-distribution length when not in Low VRAM mode.
+    DEFAULT_SAMPLE_LATENT_LENGTH = 640
 
-# Additional low-VRAM safety limits (tuned for ~8GB GPUs)
-MAX_SAFE_LATENT_LENGTH = 500
+#EFAULT_SAMPLE_LATENT_LENGTH = 640 # decrease if OOM on 8GB vram GPU
+
+# Safety limits
+# 640 is the model's in-distribution max (~30s). Low VRAM mode sets a smaller
+# *default* length, but we should not silently cap below 640 or long text will
+# truncate unexpectedly.
+MAX_SAFE_LATENT_LENGTH = 640
 MAX_SAFE_STEPS = 40
 MAX_SPEAKER_SECONDS = 120  # max duration of reference audio passed to the model
 
@@ -481,7 +487,7 @@ def synthesize_to_file(
         pad_to_max_speaker_latent_length = None
         sample_latent_length_val = DEFAULT_SAMPLE_LATENT_LENGTH or 640
 
-    # Hard safety cap for low-VRAM GPUs to reduce OOM risk
+    # Hard safety cap (in-distribution max length)
     sample_latent_length_val = min(sample_latent_length_val, MAX_SAFE_LATENT_LENGTH)
 
     cfg_mode_norm = (cfg_mode or "independent").strip().lower()
