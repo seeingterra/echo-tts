@@ -304,7 +304,6 @@ start/stop the server from within the app.
 The Gradio UI includes a small helper panel that can generate a Voxta
 provider JSON compatible with the Echo-TTS HTTP API. It:
 
-- Lets you choose a label, host, port, and output format (WAV or MP3).
 - Lets you choose a label, host, port, and output format (WAV, MP3, or PCM).
 - Generates a JSON snippet with:
     - `UrlTemplate` pointing at `http://<host>:<port>/tts`
@@ -312,6 +311,25 @@ provider JSON compatible with the Echo-TTS HTTP API. It:
     - A `RequestBody` template patterned after a working ChatterBox config.
     - A `VoicesFormat` entry that maps each file in `audio_prompts/` to a
         Voxta voice.
+
+Example (PCM output):
+
+```jsonc
+{
+    "label": "Echo-TTS",
+    "values": {
+        "ContentType": "audio/L16; rate=44100; channels=1",
+        "ForceConversion": "true",
+        "UrlTemplate": "http://localhost:8004/tts",
+        "Request ContentType": "application/json",
+        "RequestBody": "{\n\"text\": \"{{ text }}\",\n\"voice_mode\": \"predefined\",\n\"predefined_voice_id\": \"{{ voice_id }}\",\n\"output_format\": \"pcm\",\n\"num_steps\": 20\n}",
+        "VoicesUrl": "http://localhost:8004/get_predefined_voices",
+        "VoicesFormat": "{\n  \"label\": \"{{display_name}}\",\n  \"parameters\": {\n    \"voice_id\": \"{{filename}}\"\n  }\n}"
+    }
+}
+```
+
+For WAV output, set `ContentType` to `audio/wav` and set `output_format` to `wav`.
 
 You can paste this generated JSON directly into Voxta's provider
 configuration to connect Echo-TTS as a TTS backend.
