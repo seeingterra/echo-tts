@@ -7,13 +7,17 @@
 #   https://pytorch.org/get-started/locally/
 # and adjust the index URL as needed for your CUDA runtime.
 
-# 1) Install torch and torchaudio from the CUDA 12.8 wheel index
---index-url https://download.pytorch.org/whl/cu128
-torch
-torchaudio
-
-# 2) Reset to the default PyPI index for everything else
+# Package index configuration
+#
+# NOTE: pip applies index settings globally for the whole requirements file.
+# We therefore use PyPI as the primary index (for most deps) and add the
+# official PyTorch cu128 wheel index as an *extra* index.
 --index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# CUDA builds (cu128)
+torch==2.9.1+cu128
+torchaudio==2.9.1+cu128
 
 # The remaining dependencies are device-agnostic and mirror requirements.txt
 huggingface-hub

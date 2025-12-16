@@ -84,6 +84,13 @@ On Windows with NVIDIA GPU (CUDA 12.8 wheels):
 pip install -r requirements-cuda.txt
 ```
 
+If you previously installed a CPU-only build of PyTorch in the same environment,
+reinstall with:
+
+```bash
+pip install --upgrade --force-reinstall -r requirements-cuda.txt
+```
+
 > **Windows tip: long path support**
 > Some Python packages (and virtual environments) can hit Windows' default
 > path length limit and fail with odd file/path errors. Enabling "LongPaths"
