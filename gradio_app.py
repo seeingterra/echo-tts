@@ -951,8 +951,10 @@ def select_audio_prompt_file(evt: gr.SelectData):
     if evt.value and AUDIO_PROMPT_FOLDER is not None:
         file_path = AUDIO_PROMPT_FOLDER / evt.value
         if file_path.exists():
-            return gr.update(value=str(file_path))
-    return gr.update()
+            path_str = str(file_path)
+            # Return both the Audio component update and the raw path for State.
+            return gr.update(value=path_str), path_str
+    return gr.update(), None
 
 
 def upload_audio_prompts(files):
@@ -1252,6 +1254,9 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
         )
 
     session_id_state = gr.State(None)
+    # Track the current speaker reference filepath explicitly so generation
+    # always uses the latest selected prompt (table selection or upload/mic).
+    speaker_audio_path_state = gr.State("")
 
     # Device selection row (applies to UI and API usage; persisted between runs)
     with gr.Row():
@@ -1578,7 +1583,7 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
 
     # Event handlers
     if AUDIO_PROMPT_FOLDER is not None:
-        audio_prompt_table.select(select_audio_prompt_file, outputs=[custom_audio_input])
+        audio_prompt_table.select(select_audio_prompt_file, outputs=[custom_audio_input, speaker_audio_path_state])
         audio_prompt_search.change(filter_audio_prompts, inputs=[audio_prompt_search], outputs=[audio_prompt_table])
 
         # When users click the upload button, save selected files into audio_prompts/
@@ -1588,6 +1593,13 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
             return table_update, gr.update(value=status, visible=True)
 
         upload_btn.click(_on_upload, inputs=[audio_prompt_uploader], outputs=[audio_prompt_table, upload_status])
+
+    # Keep speaker_audio_path_state in sync with manual uploads/mic recording
+    # and with clearing the Audio component.
+    def _sync_speaker_path(p):
+        return p or ""
+
+    custom_audio_input.change(_sync_speaker_path, inputs=[custom_audio_input], outputs=[speaker_audio_path_state])
 
     text_presets_table.select(select_text_preset, outputs=text_prompt)
 
@@ -1678,7 +1690,7 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
         generate_audio,
         inputs=[
             text_prompt,
-            custom_audio_input,
+            speaker_audio_path_state,
             num_steps,
             rng_seed,
             cfg_scale_text,
