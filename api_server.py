@@ -305,26 +305,13 @@ async def tts(req: TTSRequest):
 
     if fmt == "pcm":
         try:
-            import torch
-            import torchaudio
+            from audio_io import read_wav_pcm16_frames
 
-            waveform, sample_rate = torchaudio.load(str(audio_path))
-            # waveform shape: (channels, samples)
-            if waveform.ndim != 2:
-                raise RuntimeError(f"Unexpected waveform shape: {tuple(waveform.shape)}")
-
-            # Downmix to mono if needed
-            if waveform.shape[0] > 1:
-                waveform = waveform.mean(dim=0, keepdim=True)
-
-            target_sr = 44100
-            if int(sample_rate) != target_sr:
-                waveform = torchaudio.functional.resample(waveform, int(sample_rate), target_sr)
-
-            # Convert float [-1,1] to signed 16-bit little-endian PCM
-            waveform = waveform.clamp(-1.0, 1.0)
-            pcm16 = (waveform * 32767.0).to(torch.int16)
-            data = pcm16.squeeze(0).contiguous().numpy().tobytes()
+            data, sample_rate, channels = read_wav_pcm16_frames(audio_path)
+            if int(sample_rate) != 44100 or int(channels) != 1:
+                raise RuntimeError(
+                    f"Expected 44.1kHz mono WAV for PCM output; got rate={sample_rate}, channels={channels}"
+                )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"PCM conversion failed: {e}")
 

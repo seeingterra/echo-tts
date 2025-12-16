@@ -15,7 +15,8 @@ logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 import gradio as gr
 import torch
-import torchaudio
+
+from audio_io import save_wav_pcm16
 
 TEXT_PRESETS_PATH = Path("./text_presets.txt")
 SAMPLER_PRESETS_PATH = Path("./sampler_presets.json")
@@ -283,68 +284,42 @@ def cleanup_temp_audio(dir_: Path, user_id: str | None, max_age_sec: int = 60 * 
 
 def save_audio_with_format(audio_tensor: torch.Tensor, base_path: Path, filename: str, sample_rate: int, audio_format: str) -> Path:
     """Save audio in specified format, fallback to WAV if MP3 encoding fails."""
-    # Ensure tensor is on CPU and 2D (channels, time) for torchaudio
+    # Ensure tensor is on CPU and 2D (channels, time)
     audio_tensor = audio_tensor.detach().cpu()
     if audio_tensor.dim() == 1:
         audio_tensor = audio_tensor.unsqueeze(0)
 
+    # Downmix to mono for consistent outputs (and simpler encoding paths)
+    if audio_tensor.dim() == 2 and audio_tensor.shape[0] > 1:
+        audio_tensor = audio_tensor.mean(dim=0, keepdim=True)
+
     if audio_format == "mp3":
         try:
             output_path = base_path / f"{filename}.mp3"
-            torchaudio.save(
+            import ffmpeg
+
+            # Feed raw float32 mono audio to ffmpeg and encode MP3.
+            tmp_raw = audio_tensor.squeeze(0).numpy().astype("float32").tobytes()
+            ffmpeg.input(
+                "pipe:",
+                format="f32le",
+                ac=1,
+                ar=sample_rate,
+            ).output(
                 str(output_path),
-                audio_tensor,
-                sample_rate,
                 format="mp3",
-                encoding="mp3",
-                bits_per_sample=None,
-            )
+                acodec="libmp3lame",
+            ).run(input=tmp_raw, capture_stdout=True, capture_stderr=True, quiet=True)
             return output_path
         except Exception as e:
             print(f"MP3 encoding failed: {e}, falling back to WAV")
             output_path = base_path / f"{filename}.wav"
-            # Try torchaudio first; if no backend, fall back to ffmpeg-python
-            try:
-                torchaudio.save(str(output_path), audio_tensor, sample_rate)
-                return output_path
-            except Exception as e2:
-                print(f"torchaudio WAV save failed ({e2}), trying ffmpeg fallback")
-
-                import ffmpeg
-
-                tmp_raw = audio_tensor.squeeze(0).numpy().astype("float32").tobytes()
-                ffmpeg.input(
-                    "pipe:",
-                    format="f32le",
-                    ac=1,
-                    ar=sample_rate,
-                ).output(
-                    str(output_path),
-                    format="wav",
-                    acodec="pcm_s16le",
-                ).run(input=tmp_raw, capture_stdout=True, capture_stderr=True, quiet=True)
-                return output_path
+            save_wav_pcm16(output_path, audio_tensor, sample_rate, downmix_to_mono=True)
+            return output_path
 
     # Default: save as WAV
     output_path = base_path / f"{filename}.wav"
-    try:
-        torchaudio.save(str(output_path), audio_tensor, sample_rate)
-    except Exception as e:
-        print(f"torchaudio WAV save failed ({e}), trying ffmpeg fallback")
-
-        import ffmpeg
-
-        tmp_raw = audio_tensor.squeeze(0).numpy().astype("float32").tobytes()
-        ffmpeg.input(
-            "pipe:",
-            format="f32le",
-            ac=1,
-            ar=sample_rate,
-        ).output(
-            str(output_path),
-            format="wav",
-            acodec="pcm_s16le",
-        ).run(input=tmp_raw, capture_stdout=True, capture_stderr=True, quiet=True)
+    save_wav_pcm16(output_path, audio_tensor, sample_rate, downmix_to_mono=True)
 
     return output_path
 

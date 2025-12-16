@@ -4,8 +4,9 @@ from typing import Callable, List, Tuple
 from huggingface_hub import hf_hub_download
 import safetensors.torch as st
 import torch
-import torchaudio
 import ffmpeg
+
+from audio_io import save_wav_pcm16
 
 from autoencoder import DAC, build_ae
 from model import EchoDiT
@@ -724,4 +725,4 @@ if __name__ == "__main__":
     )
     audio_out = ae_decode(fish_ae, pca_state, latent_out)
     audio_out = crop_audio_to_flattening_point(audio_out, latent_out[0])
-    torchaudio.save("output.wav", audio_out[0].cpu(), 44100)
+    save_wav_pcm16("output.wav", audio_out[0].cpu(), 44100)

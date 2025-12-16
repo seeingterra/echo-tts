@@ -348,7 +348,7 @@ def sample_blockwise_euler_cfg_apg_independent(
 
 
 if __name__ == "__main__":
-    import torchaudio
+    from audio_io import save_wav_pcm16
     from inference import (
         load_model_from_hf,
         load_fish_ae_from_hf,
@@ -397,7 +397,7 @@ if __name__ == "__main__":
     )
     audio_out = ae_decode(fish_ae, pca_state, latent_out)
     audio_out = crop_audio_to_flattening_point(audio_out, latent_out[0])
-    torchaudio.save("output_blockwise.wav", audio_out[0].cpu(), 44100)
+    save_wav_pcm16("output_blockwise.wav", audio_out[0].cpu(), 44100)
 
 
 
@@ -441,4 +441,4 @@ if __name__ == "__main__":
     )
     audio_out_continued = ae_decode(fish_ae, pca_state, latent_out_continued)
     audio_out_continued = crop_audio_to_flattening_point(audio_out_continued, latent_out_continued[0])
-    torchaudio.save("output_blockwise_continued.wav", audio_out_continued[0].cpu(), 44100)
+    save_wav_pcm16("output_blockwise_continued.wav", audio_out_continued[0].cpu(), 44100)

@@ -107,10 +107,10 @@ pip install --upgrade --force-reinstall -r requirements-cuda.txt
 > reduce out-of-memory errors on smaller GPUs.
 
 > **Windows audio backend / codec notes**
-> This fork replaces the older TorchCodec-based audio path with a
-> **torchaudio + FFmpeg** pipeline that has been tested on Windows. This
-> avoids several Windows-specific codec issues and makes reference audio
-> loading more robust (mono downmix + 44.1 kHz resampling).
+> This fork replaces the older TorchCodec-based audio path with an
+> **FFmpeg-based** reference audio decoding pipeline that has been tested on
+> Windows. Generated audio is written as standard PCM WAV via Python stdlib
+> (no TorchCodec required).
 
 ## Quick Start
 
@@ -146,7 +146,7 @@ from inference import (
     sample_euler_cfg_independent_guidances,
 )
 from functools import partial
-import torchaudio
+from audio_io import save_wav_pcm16
 
 # Load models (downloads from HuggingFace on first run)
 model = load_model_from_hf(delete_blockwise_modules=True)
@@ -185,7 +185,7 @@ audio_out, _ = sample_pipeline(
     rng_seed=0,
 )
 
-torchaudio.save("output.wav", audio_out[0].cpu(), 44100)
+save_wav_pcm16("output.wav", audio_out[0].cpu(), 44100)
 ```
 
 See also:
@@ -336,7 +336,7 @@ relative to the original Echo‑TTS repo.
 ### 2025-12-06 — Windows install & CUDA wheels
 
 - **CUDA 12.8 requirements**
-        - Updated `requirements-cuda.txt` to install `torch` and `torchaudio`
+    - Updated `requirements-cuda.txt` to install `torch`
             from the official PyTorch CUDA index for **cu128**.
         - All other packages (e.g. `safetensors`, `gradio`, `fastapi`) are
             pulled from PyPI to avoid resolution issues.
@@ -349,8 +349,9 @@ relative to the original Echo‑TTS repo.
 
 - **Audio backend / codec fix**
         - Removed the TorchCodec-based audio I/O path.
-        - Switched to **torchaudio + FFmpeg** for decoding, mono downmixing, and
-            44.1 kHz resampling to avoid Windows codec issues.
+        - Switched to **FFmpeg** for decoding, mono downmixing, and 44.1 kHz
+            resampling to avoid Windows codec issues. Generated WAV output is
+            written as standard PCM via Python stdlib.
 - **Tail noise and long-output tweaks**
         - Generation now adds a small silence tail and optional fade-out to
             reduce static/noise at the end of clips, especially noticeable when
