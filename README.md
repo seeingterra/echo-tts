@@ -15,6 +15,16 @@ This fork of Echo‑TTS is optimized for Windows users and for integration with
 
 All of this is layered on top of the original Echo‑TTS model behavior.
 
+Echo‑TTS is fairly forgiving (the worker downmixes to mono and resamples internally), but you’ll get the most consistent results with:
+
+- **Format**: WAV (preferred). MP3 works, but WAV avoids codec edge cases.
+- **Channels**: mono (or a clean stereo recording that can be safely downmixed).
+- **Sample rate**: 44.1 kHz is ideal (the model operates at 44.1 kHz internally).
+- **Bit depth**: 16-bit PCM is a good default.
+- **Length**: ~5–15 seconds is usually enough; very long clips are allowed (up to minutes), but don’t typically improve quality.
+- **Content**: one speaker, minimal background noise/music, no heavy reverb/echo; avoid clipping.
+
+
 A multi-speaker text-to-speech model with speaker reference conditioning. See
 the original [blog post](https://jordandarefsky.com/blog/2025/echo/) for
 technical details.
