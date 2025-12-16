@@ -646,7 +646,18 @@ def _generate_audio_on_active_model(
     )
 
     time_str = f"⏱️ Total generation time: {generation_time:.2f}s"
-    text_display = f"**Text Prompt (normalized):**\n\n{normalized_text}"
+
+    spk_label = "(none)"
+    try:
+        if speaker_audio_path and isinstance(speaker_audio_path, str):
+            spk_label = Path(speaker_audio_path).name
+    except Exception:
+        spk_label = "(unknown)"
+
+    text_display = (
+        f"**Speaker reference used:** {spk_label}\n\n"
+        f"**Text Prompt (normalized):**\n\n{normalized_text}"
+    )
     show_reference_section = (show_original_audio or reconstruct_first_30_seconds) and speaker_audio is not None
 
     return (
@@ -949,7 +960,17 @@ def filter_audio_prompts(search_query: str):
 def select_audio_prompt_file(evt: gr.SelectData):
     """Handle audio prompt file selection from table."""
     if evt.value and AUDIO_PROMPT_FOLDER is not None:
-        file_path = AUDIO_PROMPT_FOLDER / evt.value
+        # Depending on Gradio version/component, evt.value can be:
+        # - "filename.wav" (string)
+        # - ["filename.wav"] (row list)
+        # - ["filename.wav", ...] (row)
+        selected = evt.value
+        if isinstance(selected, (list, tuple)) and len(selected) > 0:
+            selected = selected[0]
+        if not isinstance(selected, str):
+            return gr.update(), None
+
+        file_path = AUDIO_PROMPT_FOLDER / selected
         if file_path.exists():
             path_str = str(file_path)
             # Return both the Audio component update and the raw path for State.
