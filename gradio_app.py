@@ -1155,10 +1155,16 @@ def generate_voxta_config(label: str, host: str, port: int, fmt: str) -> str:
     """Generate a Voxta provider JSON config string for Echo-TTS API."""
     url_host = _normalize_host_for_url(host)
     base_url = f"{url_host}:" + str(int(port))
-    if fmt not in {"wav", "mp3"}:
+    if fmt not in {"wav", "mp3", "pcm"}:
         fmt = "wav"
 
-    content_type = "audio/wav" if fmt == "wav" else "audio/mpeg"
+    if fmt == "wav":
+        content_type = "audio/wav"
+    elif fmt == "mp3":
+        content_type = "audio/mpeg"
+    else:
+        # Raw 16-bit PCM little-endian, mono, 44.1kHz.
+        content_type = "audio/L16; rate=44100; channels=1"
 
     # RequestBody string patterned after working chatterbox_tts.json example
     # Fields are aligned with api_server.TTSRequest and Echo-TTS parameters.
@@ -1539,7 +1545,7 @@ with gr.Blocks(title="Echo-TTS", css=LINK_CSS, js=JS_CODE) as demo:
             with gr.Column(scale=1):
                 api_host = gr.Textbox(label="API Host", value="http://localhost", lines=1)
                 api_port = gr.Number(label="API Port", value=8004, precision=0)
-                api_format = gr.Radio(choices=["wav", "mp3"], value="wav", label="Output Format")
+                api_format = gr.Radio(choices=["wav", "mp3", "pcm"], value="wav", label="Output Format")
 
                 start_api_btn = gr.Button("Start API Server", variant="primary")
                 stop_api_btn = gr.Button("Stop API Server")

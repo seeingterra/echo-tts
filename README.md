@@ -258,10 +258,30 @@ Voxta / ChatterBox-style TTS integrations.
         }
         ```
 
-    - Returns raw audio bytes (`audio/wav`, `audio/mpeg`, or `audio/L16` for `pcm`) on success.
+        - Returns raw audio bytes on success:
+                - `output_format="wav"` → `audio/wav` (standard WAV container)
+                - `output_format="mp3"` → `audio/mpeg`
+                - `output_format="pcm"` → `audio/L16; rate=44100; channels=1` (raw PCM16LE bytes)
     - Uses the same device / low-VRAM configuration and OOM-aware fallback
         as the Gradio UI.
     - `rng_seed` (if provided) takes precedence over `seed`.
+
+#### PCM output details
+
+`output_format="pcm"` returns **raw** 16-bit signed little-endian PCM samples (no WAV header).
+This is useful for integrations that want minimal container overhead.
+
+- **Encoding**: PCM16LE (signed)
+- **Sample rate**: 44,100 Hz
+- **Channels**: 1 (mono)
+- **HTTP content-type**: `audio/L16; rate=44100; channels=1`
+
+Implementation notes:
+- **API server**: Echo-TTS generates a WAV internally, then reads the PCM16
+    frames from that WAV and returns them directly for `pcm` responses.
+- **Gradio UI**: The UI saves playable outputs as WAV (PCM16) or MP3. PCM is
+    exposed for Voxta via the config generator (because Gradio's audio player
+    expects container formats).
 
 - `GET /get_predefined_voices`
     - Scans the `audio_prompts/` folder for supported audio files and returns a
@@ -285,6 +305,7 @@ The Gradio UI includes a small helper panel that can generate a Voxta
 provider JSON compatible with the Echo-TTS HTTP API. It:
 
 - Lets you choose a label, host, port, and output format (WAV or MP3).
+- Lets you choose a label, host, port, and output format (WAV, MP3, or PCM).
 - Generates a JSON snippet with:
     - `UrlTemplate` pointing at `http://<host>:<port>/tts`
     - `VoicesUrl` pointing at `http://<host>:<port>/get_predefined_voices`
@@ -306,6 +327,15 @@ configuration to connect Echo-TTS as a TTS backend.
 
 This is a hand-written summary of the most important changes in this fork
 relative to the original Echo‑TTS repo.
+
+### 2025-12-16 — PCM for Voxta + remove TorchCodec path
+
+- **Voxta provider generator supports PCM**
+    - The Gradio "Voxta Provider JSON" generator now supports
+        `output_format: "pcm"` and emits the matching `ContentType`.
+- **Removed TorchCodec/torchaudio WAV dependency**
+    - WAV writing uses a small Python-stdlib helper (PCM16 WAV).
+    - This avoids TorchCodec/FFmpeg DLL loading issues on Windows.
 
 ### 2025-12-06 — num_steps for Voxta / HTTP API
 
