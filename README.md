@@ -258,7 +258,7 @@ Voxta / ChatterBox-style TTS integrations.
         }
         ```
 
-    - Returns raw audio bytes (`audio/wav` or `audio/mpeg`) on success.
+    - Returns raw audio bytes (`audio/wav`, `audio/mpeg`, or `audio/L16` for `pcm`) on success.
     - Uses the same device / low-VRAM configuration and OOM-aware fallback
         as the Gradio UI.
     - `rng_seed` (if provided) takes precedence over `seed`.

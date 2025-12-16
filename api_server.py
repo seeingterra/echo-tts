@@ -25,7 +25,7 @@ class TTSRequest(BaseModel):
     voice_mode: str = "predefined"
     predefined_voice_id: Optional[str] = None
     reference_audio_filename: Optional[str] = None
-    output_format: str = "wav"  # "wav" or "mp3"
+    output_format: str = "wav"  # "wav" | "mp3" | "pcm" (16-bit little-endian, 44.1kHz)
     split_text: bool = False
     chunk_size: int = 120
     temperature: float = 0.8
@@ -223,7 +223,7 @@ def _synthesize_to_path(
 async def tts(req: TTSRequest):
     """Voxta/ChatterBox-compatible TTS endpoint.
 
-    Returns raw audio bytes in the requested format (wav or mp3).
+    Returns raw audio bytes in the requested format (wav, mp3, or pcm).
     """
     if not req.text:
         raise HTTPException(status_code=400, detail="'text' field is required")
@@ -236,8 +236,12 @@ async def tts(req: TTSRequest):
             speaker_path = str(candidate)
 
     fmt = req.output_format.lower()
-    if fmt not in {"wav", "mp3"}:
+    if fmt not in {"wav", "mp3", "pcm"}:
         fmt = "wav"
+
+    # synthesize_to_file currently produces container formats (wav/mp3).
+    # For pcm output, generate a wav and convert to raw 16-bit PCM bytes.
+    synth_fmt = "wav" if fmt == "pcm" else fmt
 
     # Field-set-aware compatibility behavior:
     # - If a client explicitly sends legacy fields (temperature/exaggeration/cfg_weight), we map them
@@ -276,7 +280,7 @@ async def tts(req: TTSRequest):
         audio_path = _synthesize_to_path(
             text=req.text,
             speaker_audio_path=speaker_path,
-            output_format=fmt,
+            output_format=synth_fmt,
             seed=req.seed,
             num_steps=req.num_steps,
             rng_seed=req.rng_seed,
@@ -298,6 +302,33 @@ async def tts(req: TTSRequest):
 
     if not audio_path.exists():
         raise HTTPException(status_code=500, detail="Generated audio file not found")
+
+    if fmt == "pcm":
+        try:
+            import torch
+            import torchaudio
+
+            waveform, sample_rate = torchaudio.load(str(audio_path))
+            # waveform shape: (channels, samples)
+            if waveform.ndim != 2:
+                raise RuntimeError(f"Unexpected waveform shape: {tuple(waveform.shape)}")
+
+            # Downmix to mono if needed
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
+
+            target_sr = 44100
+            if int(sample_rate) != target_sr:
+                waveform = torchaudio.functional.resample(waveform, int(sample_rate), target_sr)
+
+            # Convert float [-1,1] to signed 16-bit little-endian PCM
+            waveform = waveform.clamp(-1.0, 1.0)
+            pcm16 = (waveform * 32767.0).to(torch.int16)
+            data = pcm16.squeeze(0).contiguous().numpy().tobytes()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"PCM conversion failed: {e}")
+
+        return Response(content=data, media_type="audio/L16; rate=44100; channels=1")
 
     data = audio_path.read_bytes()
     mime = "audio/wav" if fmt == "wav" else "audio/mpeg"
