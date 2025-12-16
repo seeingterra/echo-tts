@@ -1,16 +1,16 @@
 # CUDA-enabled requirements for Echo-TTS (Windows-friendly)
 #
 # Use this file if you have an NVIDIA GPU and want GPU acceleration.
-# It pins torch / torchaudio to versions that should be compatible with
-# CUDA 12.4 wheels from the official PyTorch index as of late 2025.
+# It installs torch / torchaudio from the official PyTorch CUDA 12.8 wheel
+# index (cu128).
 # Always cross-check with:
 #   https://pytorch.org/get-started/locally/
-# and adjust the versions or index URL as needed for your CUDA runtime.
+# and adjust the index URL as needed for your CUDA runtime.
 
-# 1) Install torch and torchaudio from the CUDA 12.4 wheel index
---index-url https://download.pytorch.org/whl/cu124
-torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
-torchaudio==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+# 1) Install torch and torchaudio from the CUDA 12.8 wheel index
+--index-url https://download.pytorch.org/whl/cu128
+torch
+torchaudio
 
 # 2) Reset to the default PyPI index for everything else
 --index-url https://pypi.org/simple

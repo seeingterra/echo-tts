@@ -10,7 +10,7 @@ This fork of Echo‑TTS is optimized for Windows users and for integration with
 - A **Voxta provider JSON generator** directly in the UI
 - **GPU / CPU selection with persistence** across runs
 - **Low-VRAM safeguards** tuned for ≈8 GB GPUs
-- A **Windows-tested install path** (Python 3.13+, CUDA 12.4 wheels option)
+- A **Windows-tested install path** (Python 3.13+, CUDA 12.8 wheels option)
 - Added to ** audio prompt library** with drag-and-drop **multi-file upload**
 
 All of this is layered on top of the original Echo‑TTS model behavior.
@@ -78,7 +78,7 @@ On Windows (CPU or generic install):
 pip install -r requirements.txt
 ```
 
-On Windows with NVIDIA GPU (CUDA 12.4 wheels):
+On Windows with NVIDIA GPU (CUDA 12.8 wheels):
 
 ```bash
 pip install -r requirements-cuda.txt
@@ -328,10 +328,9 @@ relative to the original Echo‑TTS repo.
 
 ### 2025-12-06 — Windows install & CUDA wheels
 
-- **CUDA 12.4 requirements**
-        - Added `requirements-cuda.txt` that pins `torch==2.6.0+cu124` and
-            `torchaudio==2.6.0+cu124` and uses the official PyTorch CUDA index
-            for those wheels.
+- **CUDA 12.8 requirements**
+        - Updated `requirements-cuda.txt` to install `torch` and `torchaudio`
+            from the official PyTorch CUDA index for **cu128**.
         - All other packages (e.g. `safetensors`, `gradio`, `fastapi`) are
             pulled from PyPI to avoid resolution issues.
 - **Windows-friendly Python recommendation**
